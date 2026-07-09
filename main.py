@@ -20,10 +20,16 @@ MODELS = [
 ]
 
 
-def ask(model: str, prompt: str) -> str:
+def ask(model: str, prompt: str, provider: str | None = None) -> str:
+    extra_body = {}
+    if provider is not None:
+        # Pin the request to one OpenRouter provider instead of letting it
+        # pick the host by price/uptime; fail rather than fall back elsewhere.
+        extra_body["provider"] = {"order": [provider], "allow_fallbacks": False}
     response = client.chat.completions.create(
         model=model,
         messages=[ChatCompletionUserMessageParam(role="user", content=prompt)],
+        extra_body=extra_body,
     )
     return response.choices[0].message.content or ""
 
@@ -34,6 +40,10 @@ def main() -> None:
         print(f"--- {model} ---")
         print(ask(model, prompt))
         print()
+
+    model = "meta-llama/llama-3.3-70b-instruct"
+    print(f"--- {model} (pinned to Groq) ---")
+    print(ask(model, prompt, provider="groq"))
 
 
 if __name__ == "__main__":
