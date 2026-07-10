@@ -14,7 +14,6 @@ from functools import lru_cache
 from dotenv import load_dotenv
 from openai import OpenAI
 from openai.types.chat import (
-    ChatCompletion,
     ChatCompletionAssistantMessageParam as AssistantMessage,
     ChatCompletionMessageParam as Message,
     ChatCompletionSystemMessageParam as SystemMessage,
@@ -31,11 +30,6 @@ def _client() -> OpenAI:
         base_url="https://openrouter.ai/api/v1",
         api_key=os.environ["OPENROUTER_API_KEY"],
     )
-
-
-def _reply_text(response: ChatCompletion) -> str:
-    """Pull the assistant's text out of an OpenRouter response."""
-    return response.choices[0].message.content or ""
 
 
 @dataclass(frozen=True)
@@ -60,7 +54,7 @@ class Bot:
             model=self.model,
             messages=messages,
         )
-        return _reply_text(response)
+        return response.choices[0].message.content or ""
 
 
 GPT = Bot(
