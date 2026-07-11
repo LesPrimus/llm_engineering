@@ -28,6 +28,17 @@ uv run main.py
 
 To try other models, add their IDs from <https://openrouter.ai/models> to the `MODELS` list in `main.py`.
 
+## Web UI
+
+A placeholder Gradio app lives in the `gradio_app` package. Launch it with:
+
+```bash
+uv run python -m gradio_app
+```
+
+This opens a local page in your browser. It's currently a scaffold — replace the
+placeholder in `gradio_app/app.py` with a real interface.
+
 ## Development
 
 Formatting, linting, and type checking:
