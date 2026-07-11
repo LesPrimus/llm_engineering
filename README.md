@@ -33,7 +33,7 @@ To try other models, add their IDs from <https://openrouter.ai/models> to the `M
 A placeholder Gradio app lives in the `gradio_app` package. Launch it with:
 
 ```bash
-uv run python -m gradio_app
+uv run python -m gradio_app.app
 ```
 
 This opens a local page in your browser. It's currently a scaffold — replace the

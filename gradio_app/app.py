@@ -29,3 +29,7 @@ def launch(**kwargs: Any) -> None:
     """
     load_dotenv()
     build_demo().launch(**kwargs)
+
+
+if __name__ == "__main__":
+    launch()
