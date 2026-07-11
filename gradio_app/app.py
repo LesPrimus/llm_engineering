@@ -1,9 +1,9 @@
-"""A placeholder Gradio app for the llm-engineering project.
+"""A minimal Gradio app for the llm-engineering project.
 
-This is a scaffold: ``build_demo`` returns an empty-ish ``gr.Blocks`` UI meant
-to be replaced with a real interface later. Keeping the demo behind a factory
-(rather than a module-level value) means importing this package has no side
-effects, mirroring the lazy client in ``openrouter/chat.py``.
+``shout`` uppercases its input; ``build_demo`` wires it to an input textbox and
+an output textbox. Keeping the demo behind a factory (rather than a module-level
+value) means importing this package has no side effects, mirroring the lazy
+client in ``openrouter/chat.py``.
 """
 
 from __future__ import annotations
@@ -14,11 +14,19 @@ import gradio as gr
 from dotenv import load_dotenv
 
 
+def shout(text: str) -> str:
+    """Return ``text`` in uppercase."""
+    return text.upper()
+
+
 def build_demo() -> gr.Blocks:
-    """Build and return the Gradio UI. Replace the placeholder with real UI."""
-    with gr.Blocks(title="llm-engineering") as demo:
-        gr.Markdown("# llm-engineering\nPlaceholder — replace me with a real UI.")
-    return demo
+    """Build the UI: a textbox in, its uppercase out."""
+    return gr.Interface(
+        fn=shout,
+        inputs=gr.Textbox(label="Input"),
+        outputs=gr.Textbox(label="Output"),
+        title="llm-engineering",
+    )
 
 
 def launch(**kwargs: Any) -> None:
