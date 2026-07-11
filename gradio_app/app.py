@@ -26,6 +26,7 @@ def build_demo() -> gr.Blocks:
         inputs=gr.Textbox(label="Input"),
         outputs=gr.Textbox(label="Output"),
         title="llm-engineering",
+        flagging_mode="never",
     )
 
 
