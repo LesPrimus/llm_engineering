@@ -30,8 +30,8 @@ To try other models, add their IDs from <https://openrouter.ai/models> to the `M
 
 ## Web UI
 
-A small Gradio app lives in the `gradio_app` package: type a message and chat
-with Claude Sonnet through the Anthropic API. Launch it with:
+A small Gradio app lives in the `gradio_app` package: type a message and
+Claude Sonnet's reply streams back through the Anthropic API. Launch it with:
 
 ```bash
 uv run python -m gradio_app.app
