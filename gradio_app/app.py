@@ -1,30 +1,41 @@
-"""A minimal Gradio app for the llm-engineering project.
+"""A minimal Gradio chat app for the llm-engineering project.
 
-``shout`` uppercases its input; ``build_demo`` wires it to an input textbox and
-an output textbox. Keeping the demo behind a factory (rather than a module-level
-value) means importing this package has no side effects, mirroring the lazy
-client in ``openrouter/chat.py``.
+A ``Bot`` wraps a Claude model together with its Anthropic client; ``chat``
+takes a message and returns Claude's reply, wired to an input textbox and an
+output textbox. ``build_demo`` constructs the bot inside a factory (not at
+import) so ``load_dotenv`` has run before the client reads ``ANTHROPIC_API_KEY``.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any
 
 import gradio as gr
 from dotenv import load_dotenv
 
+from claude import ClaudeClient
 
-def shout(text: str) -> str:
-    """Return ``text`` in uppercase."""
-    return text.upper()
+
+@dataclass(frozen=True)
+class Bot:
+    """A chatbot backed by a single Claude model."""
+
+    model: str = "claude-sonnet-5"
+    client: ClaudeClient = field(default_factory=ClaudeClient)
+
+    def chat(self, message: str) -> str:
+        """Send ``message`` to Claude and return its reply."""
+        return self.client.ask(self.model, message)
 
 
 def build_demo() -> gr.Blocks:
-    """Build the UI: a textbox in, its uppercase out."""
+    """Build the UI: a message in, Claude's reply out."""
+    bot = Bot()
     return gr.Interface(
-        fn=shout,
-        inputs=gr.Textbox(label="Input"),
-        outputs=gr.Textbox(label="Output"),
+        fn=bot.chat,
+        inputs=gr.Textbox(label="You"),
+        outputs=gr.Textbox(label="Claude"),
         title="llm-engineering",
         flagging_mode="never",
     )
@@ -33,8 +44,9 @@ def build_demo() -> gr.Blocks:
 def launch(**kwargs: Any) -> None:
     """Load environment variables, build the demo, and serve it.
 
-    ``load_dotenv`` runs here (not at import) so API keys are available once the
-    real UI is built, matching how ``main.py`` bootstraps the project.
+    ``load_dotenv`` runs here (not at import) so ``ANTHROPIC_API_KEY`` is
+    available before ``Bot`` builds its client, matching how ``main.py``
+    bootstraps the project.
     """
     load_dotenv()
     build_demo().launch(**kwargs)
