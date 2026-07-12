@@ -52,6 +52,17 @@ uv run python -m gradio_app.multibot
 
 It uses `OPENROUTER_API_KEY` — no Anthropic key needed.
 
+**Website summarizer.** Paste a company's website URL and pick GPT, Claude, or
+DeepSeek; the landing page is fetched with BeautifulSoup and a short Markdown
+summary streams back:
+
+```bash
+uv run python -m gradio_app.website_summarizer
+```
+
+It uses `OPENROUTER_API_KEY` too. Only the given page is fetched — links are not
+followed.
+
 ## Development
 
 Formatting, linting, and type checking:
