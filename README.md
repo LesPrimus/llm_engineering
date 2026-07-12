@@ -30,15 +30,27 @@ To try other models, add their IDs from <https://openrouter.ai/models> to the `M
 
 ## Web UI
 
-A small Gradio app lives in the `gradio_app` package: type a message and
-Claude Sonnet's reply streams back through the Anthropic API. Launch it with:
+Two Gradio apps live in the `gradio_app` package; both open a local page in your
+browser.
+
+**Single-model (Claude).** Type a message and Claude Sonnet's reply streams back
+through the Anthropic API:
 
 ```bash
 uv run python -m gradio_app.app
 ```
 
-This opens a local page in your browser. It reads `ANTHROPIC_API_KEY` from your
-`.env`, so add that key alongside `OPENROUTER_API_KEY`.
+It reads `ANTHROPIC_API_KEY` from your `.env`, so add that key alongside
+`OPENROUTER_API_KEY`.
+
+**Multibot selector.** Pick GPT, Claude, or DeepSeek from a dropdown; the reply
+streams back through OpenRouter:
+
+```bash
+uv run python -m gradio_app.multibot
+```
+
+It uses `OPENROUTER_API_KEY` — no Anthropic key needed.
 
 ## Development
 
