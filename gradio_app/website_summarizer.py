@@ -9,8 +9,10 @@ at OpenRouter, so switching models is just a different model ID.
 This mirrors ``gradio_app/multibot.py``: a ``Model`` enum lists the choices
 (member name is the UI label, value is the OpenRouter model ID) and a
 ``Summarizer`` dataclass pairs a chosen ``Model`` with its own OpenRouter client
-and a summarization system prompt. Clients are built inside ``build_demo`` (not
-at import), so importing this module has no side effects.
+and a summarization system prompt. A ``SummarizerApp`` owns one ``Summarizer``
+per model and serves the UI; its summarizers (and their clients) are built when
+the app is instantiated, not at import, so importing this module has no side
+effects.
 
 Run it with ``uv run python -m gradio_app.website_summarizer``.
 """
@@ -97,11 +99,19 @@ class Summarizer:
                 yield reply
 
 
-def build_demo() -> gr.Blocks:
-    """Build the UI: pick a model, enter a company URL, stream a Markdown summary."""
-    summarizers = {model.name: Summarizer(model) for model in Model}
+class SummarizerApp:
+    """The website-summarizer Gradio app: one ``Summarizer`` per model, plus the UI.
 
-    def respond(name: str, url: str) -> Iterator[str]:
+    Summarizers (and their OpenRouter clients) are built in ``__init__``, so
+    constructing an app reads ``OPENROUTER_API_KEY`` from ``.env`` — but only
+    when instantiated (e.g. under ``if __name__ == "__main__"``), never at import.
+    """
+
+    def __init__(self) -> None:
+        self.summarizers = {model.name: Summarizer(model) for model in Model}
+
+    def respond(self, name: str, url: str) -> Iterator[str]:
+        """Fetch ``url`` (main page only) and stream the chosen model's summary."""
         url = url.strip()
         if not url:
             yield "Enter a company website URL to summarize."
@@ -113,33 +123,34 @@ def build_demo() -> gr.Blocks:
         except httpx.HTTPError as error:
             yield f"**Couldn't fetch {url}:** {error}"
             return
-        yield from summarizers[name].summarize(website)
+        yield from self.summarizers[name].summarize(website)
 
-    return gr.Interface(
-        fn=respond,
-        inputs=[
-            gr.Dropdown(
-                choices=[model.name for model in Model],
-                value=Model.Claude.name,
-                label="Model",
-            ),
-            gr.Textbox(label="Company website URL"),
-        ],
-        outputs=gr.Markdown(label="Summary"),
-        title="llm-engineering — website summarizer",
-        flagging_mode="never",
-    )
+    def build_demo(self) -> gr.Blocks:
+        """Build the UI: pick a model, enter a company URL, stream a Markdown summary."""
+        return gr.Interface(
+            fn=self.respond,
+            inputs=[
+                gr.Dropdown(
+                    choices=[model.name for model in Model],
+                    value=Model.Claude.name,
+                    label="Model",
+                ),
+                gr.Textbox(label="Company website URL"),
+            ],
+            outputs=gr.Markdown(label="Summary"),
+            title="llm-engineering — website summarizer",
+            flagging_mode="never",
+        )
 
+    def launch(self, **kwargs: Any) -> None:
+        """Build the demo and serve it.
 
-def launch(**kwargs: Any) -> None:
-    """Build the demo and serve it.
-
-    Each summarizer's client factory calls ``load_dotenv`` as it builds, so
-    ``OPENROUTER_API_KEY`` is read from ``.env`` without ``launch`` having to
-    manage the environment.
-    """
-    build_demo().launch(**kwargs)
+        Each summarizer's client factory calls ``load_dotenv`` as it builds, so
+        ``OPENROUTER_API_KEY`` is read from ``.env`` without ``launch`` having to
+        manage the environment.
+        """
+        self.build_demo().launch(**kwargs)
 
 
 if __name__ == "__main__":
-    launch()
+    SummarizerApp().launch()
