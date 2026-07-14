@@ -8,6 +8,19 @@
 
 **Tech Stack:** Python 3.14, uv, Gradio (`gr.ChatInterface`), the Anthropic Python SDK (already a dependency), python-dotenv.
 
+> **Post-implementation update (2026-07-14):** After Task 1 landed, the module was
+> refactored to use the SDK **tool runner** instead of the hand-written loop:
+> `get_airline_price` became a `@beta_tool` (schema from its signature/docstring,
+> pricing logic factored into a plain `_price()` helper), and `chat` now uses
+> `client.beta.messages.tool_runner(..., stream=True)`, iterating one message
+> stream per turn. This removed the `TOOL` dict, the `TOOLS` `ClassVar`, and the
+> manual `stop_reason`/`tool_result`/`while` bookkeeping; `_to_messages` returns
+> `list[BetaMessageParam]` (the beta path). The smoke checks below shift
+> accordingly: test `_price(...)` for pricing, and assert `get_airline_price.name`
+> / `.input_schema` / `.description` for the tool. Tradeoff: a dependency on the
+> **beta** `tool_runner`/`@beta_tool` surface. Tasks below describe the original
+> manual-loop implementation.
+
 ## Global Constraints
 
 - Python >= 3.14; manage everything through `uv` (`uv run …`). **No new dependencies** — `anthropic`, `gradio`, and `python-dotenv` are already in `pyproject.toml`.

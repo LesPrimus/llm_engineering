@@ -3,6 +3,18 @@
 **Date:** 2026-07-14
 **Status:** Approved
 
+> **Update (2026-07-14):** After the initial implementation (a hand-written
+> streaming tool loop), the module was refactored to use the SDK's **tool
+> runner** helpers — `get_airline_price` is a `@beta_tool` (schema derived from
+> its signature/docstring) and `chat` drives the loop with
+> `client.beta.messages.tool_runner(..., stream=True)`, iterating one message
+> stream per turn. This deletes the manual `TOOL` dict, the `TOOLS` `ClassVar`,
+> the `stop_reason`/`tool_result` bookkeeping, and the manual `while` loop. The
+> pricing logic lives in a plain `_price()` helper wrapped by the tool (so it
+> stays directly unit-checkable), and the beta path uses `BetaMessageParam`. The
+> tradeoff is a dependency on the **beta** `tool_runner`/`@beta_tool` surface.
+> The sections below describe the original manual-loop design.
+
 ## Goal
 
 Add a Gradio chat app for an airline ticket assistant, in a new module
