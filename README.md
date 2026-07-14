@@ -63,6 +63,19 @@ uv run python -m gradio_app.website_summarizer
 It uses `OPENROUTER_API_KEY` too. Only the given page is fetched — links are not
 followed.
 
+**Airline ticket chat.** A multi-turn airline-ticket assistant built on
+`gr.ChatInterface`. Ask what a flight costs and Claude calls a `get_airline_price`
+tool that returns a dummy price in euros; the reply streams back through the
+Anthropic API:
+
+```bash
+uv run python -m gradio_app.airline
+```
+
+It reads `ANTHROPIC_API_KEY` from your `.env` (native Claude, like the
+single-model app above) — no OpenRouter key needed. Prices are placeholder data,
+not a real fare lookup.
+
 ## Development
 
 Formatting, linting, and type checking:
