@@ -7,17 +7,19 @@ native Anthropic SDK, so replies stream straight from Claude.
 
 This is the sibling of ``gradio_app/chatinterface.py`` — same self-contained
 ``Bot`` dataclass that owns its own ``Anthropic`` client, on ``gr.ChatInterface``
-— but it declares a tool. ``chat`` runs a streaming manual tool loop: it streams a
-turn; if Claude stops with ``stop_reason == "tool_use"`` it runs the tool, appends
-the ``tool_result``, and streams the next turn. Text accumulates across turns into
-one growing string so the UI never resets. The persona (``SYSTEM``) and tool list
-(``TOOLS``) live on ``Bot`` as ``ClassVar``s. The bot is built inside
+— but it declares a tool. Instead of a hand-written tool loop it uses the SDK's
+**tool runner**: ``get_airline_price`` is a ``@beta_tool`` (its schema is derived
+from the signature and docstring), and ``client.beta.messages.tool_runner(...,
+stream=True)`` drives the loop — each iteration yields one turn's message stream,
+and the runner runs the tool and continues automatically. ``chat`` accumulates
+text across turns into one growing string so the UI never resets. The persona
+(``SYSTEM``) lives on ``Bot`` as a ``ClassVar``. The bot is built inside
 ``build_demo`` (not at import), so importing this module has no side effects.
 
 ``get_airline_price`` returns dummy data (a small known-city table plus a
-deterministic fallback) — there is no real pricing backend. Run it with
-``uv run python -m gradio_app.airline``. It reads ``ANTHROPIC_API_KEY`` from
-``.env`` (native Claude, like ``gradio_app.chatinterface``).
+deterministic fallback) — there is no real pricing backend. The tool runner is a
+**beta** SDK helper. Run it with ``uv run python -m gradio_app.airline``. It reads
+``ANTHROPIC_API_KEY`` from ``.env`` (native Claude, like ``gradio_app.chatinterface``).
 """
 
 from collections.abc import Iterator
@@ -25,13 +27,13 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar, Literal, cast
 
 import gradio as gr
-from anthropic import Anthropic
-from anthropic.types import MessageParam, ToolParam, ToolResultBlockParam
+from anthropic import Anthropic, beta_tool
+from anthropic.types.beta import BetaMessageParam
 from dotenv import load_dotenv
 
 # Dummy EUR ticket prices for a handful of destinations. Anything not listed
-# gets a deterministic fallback (see get_airline_price) so unknown cities still
-# vary and the demo stays reproducible.
+# gets a deterministic fallback (see _price) so unknown cities still vary and
+# the demo stays reproducible.
 _PRICES: dict[str, int] = {
     "london": 120,
     "paris": 95,
@@ -43,12 +45,13 @@ _PRICES: dict[str, int] = {
 }
 
 
-def get_airline_price(location: str) -> str:
+def _price(location: str) -> str:
     """Return a dummy ticket price to ``location``, formatted as ``"<n> EUR"``.
 
     Known cities come from ``_PRICES`` (case-insensitive). Unknown locations get
     a deterministic fallback derived from the name, so repeated calls are stable
-    and the demo needs no real pricing backend. Never raises.
+    and the demo needs no real pricing backend. Never raises. This is the plain,
+    directly-testable core wrapped by the ``get_airline_price`` tool.
     """
     key = location.strip().lower()
     if key in _PRICES:
@@ -59,24 +62,17 @@ def get_airline_price(location: str) -> str:
     return f"{price} EUR"
 
 
-TOOL: ToolParam = {
-    "name": "get_airline_price",
-    "description": (
-        "Get the price of an airline ticket to a destination city, in euros "
-        "(EUR). Call this whenever the user asks the price or cost of a flight "
-        "to a place, or asks how much it is to fly somewhere."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "location": {
-                "type": "string",
-                "description": "The destination city, e.g. 'London' or 'Tokyo'.",
-            },
-        },
-        "required": ["location"],
-    },
-}
+@beta_tool
+def get_airline_price(location: str) -> str:
+    """Get the price of an airline ticket to a destination city, in euros (EUR).
+
+    Call this whenever the user asks the price or cost of a flight to a place, or
+    asks how much it is to fly somewhere.
+
+    Args:
+        location: The destination city, e.g. 'London' or 'Tokyo'.
+    """
+    return _price(location)
 
 
 @dataclass(frozen=True)
@@ -90,7 +86,6 @@ class Bot:
         "the get_airline_price tool to look it up; never guess or invent a price. "
         "Prices are in euros (EUR)."
     )
-    TOOLS: ClassVar[list[ToolParam]] = [TOOL]
 
     model: str = "claude-sonnet-5"
     system: str = SYSTEM
@@ -98,67 +93,51 @@ class Bot:
     client: Anthropic = field(default_factory=Anthropic)
 
     @staticmethod
-    def _to_messages(message: str, history: list[dict[str, Any]]) -> list[MessageParam]:
+    def _to_messages(
+        message: str, history: list[dict[str, Any]]
+    ) -> list[BetaMessageParam]:
         """Map a Gradio messages-format history plus the new user ``message`` to
-        an Anthropic ``messages`` list.
+        an Anthropic (beta) ``messages`` list for the tool runner.
 
         Gradio history entries are ``{"role": "user"|"assistant", "content": str}``
-        dicts — the same shape as ``MessageParam`` — so each maps directly. Only
-        ``user``/``assistant`` turns with non-empty content are kept (any
+        dicts — the same shape as ``BetaMessageParam`` — so each maps directly.
+        Only ``user``/``assistant`` turns with non-empty content are kept (any
         metadata/tool entries are skipped). The system prompt is *not* included
         here; it is passed separately via ``system=``.
         """
-        messages: list[MessageParam] = [
-            MessageParam(
+        messages: list[BetaMessageParam] = [
+            BetaMessageParam(
                 role=cast(Literal["user", "assistant"], turn["role"]),
                 content=turn["content"],
             )
             for turn in history
             if turn.get("role") in ("user", "assistant") and turn.get("content")
         ]
-        messages.append(MessageParam(role="user", content=message))
+        messages.append(BetaMessageParam(role="user", content=message))
         return messages
 
     def chat(self, message: str, history: list[dict[str, Any]]) -> Iterator[str]:
         """Stream Claude's reply to ``message``, running the price tool as needed.
 
-        Streams a turn; if Claude stops to call ``get_airline_price``, runs it,
-        appends the ``tool_result``, and streams the next turn. ``reply``
-        accumulates across every turn so ``gr.ChatInterface`` sees one growing
-        string and never resets the displayed text.
+        The SDK tool runner drives the loop: with ``stream=True`` each iteration
+        yields one turn's message stream, and when Claude calls
+        ``get_airline_price`` the runner runs it and continues to the next turn
+        automatically. ``reply`` accumulates across every turn so
+        ``gr.ChatInterface`` sees one growing string and never resets the text.
         """
-        messages = self._to_messages(message, history)
+        runner = self.client.beta.messages.tool_runner(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            system=self.system,
+            tools=[get_airline_price],
+            messages=self._to_messages(message, history),
+            stream=True,
+        )
         reply = ""
-        while True:
-            with self.client.messages.stream(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                system=self.system,
-                messages=messages,
-                tools=self.TOOLS,
-            ) as stream:
-                for text in stream.text_stream:
-                    reply += text
-                    yield reply
-                final = stream.get_final_message()
-
-            messages.append(MessageParam(role="assistant", content=final.content))
-            if final.stop_reason != "tool_use":
-                return
-
-            tool_results: list[ToolResultBlockParam] = []
-            for block in final.content:
-                if block.type == "tool_use" and block.name == "get_airline_price":
-                    args = cast(dict[str, Any], block.input)
-                    result = get_airline_price(str(args["location"]))
-                    tool_results.append(
-                        ToolResultBlockParam(
-                            type="tool_result",
-                            tool_use_id=block.id,
-                            content=result,
-                        )
-                    )
-            messages.append(MessageParam(role="user", content=tool_results))
+        for stream in runner:
+            for text in stream.text_stream:
+                reply += text
+                yield reply
 
 
 def build_demo() -> gr.Blocks:
