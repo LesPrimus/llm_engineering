@@ -13,3 +13,6 @@ __pycache__/
 
 # Gradio
 .gradio/
+
+# SQLite
+gradio_app/airline_prices.db
