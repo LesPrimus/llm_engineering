@@ -15,6 +15,61 @@
 > tradeoff is a dependency on the **beta** `tool_runner`/`@beta_tool` surface.
 > The sections below describe the original manual-loop design.
 
+> **Update (2026-07-15): SQLite-backed pricing.** The in-memory `_PRICES` dict is
+> replaced by a **SQLite** database that `_price()` reads. The public surface is
+> unchanged — `get_airline_price` (the `@beta_tool`) still wraps the plain
+> `_price()` core, prices for the seven seed cities are identical (`"London"` →
+> `"120 EUR"`), and unknown cities still get the deterministic char-sum fallback.
+> Only `gradio_app/airline.py` and `.gitignore` change; `sqlite3` is stdlib, so no
+> new dependency.
+>
+> - **DB file:** `_DB_PATH = Path(__file__).with_name("airline_prices.db")` — a
+>   module constant (no I/O at import, so importing stays side-effect-free). The
+>   file is **generated, not committed**; `.gitignore` gains a `# SQLite` section
+>   ignoring `gradio_app/airline_prices.db`.
+> - **Schema & seed:** one table, `prices(city TEXT PRIMARY KEY, price INTEGER)`.
+>   The former dict becomes `_SEED: dict[str, int]` (the same seven city→price
+>   rows), used only as seed data.
+> - **Seeding — launch only.** A helper `_ensure_db()` opens a connection,
+>   `CREATE TABLE IF NOT EXISTS prices (...)`, and, **only if the table is empty**,
+>   `INSERT OR IGNORE`s the seed rows and commits (idempotent, race-safe).
+>   `launch()` calls `_ensure_db()` once — after `load_dotenv()`, before
+>   `build_demo()` — so the DB is auto-created and seeded on startup. `_price()`
+>   does **not** seed.
+> - **`_price()` is a pure reader.** It opens a connection via
+>   `contextlib.closing(_connect())` (a raw `sqlite3` connection used as a plain
+>   context manager commits but does **not** close, so `closing` is required),
+>   runs `SELECT price FROM prices WHERE city = ?` on the lowercased/stripped key,
+>   and returns `"<n> EUR"` if found or the deterministic
+>   `100 + sum(ord(c) for c in key) % 900` fallback otherwise. It never creates or
+>   seeds the table.
+>   ```python
+>   def _price(location: str) -> str:
+>       key = location.strip().lower()
+>       with closing(_connect()) as conn:
+>           row = conn.execute(
+>               "SELECT price FROM prices WHERE city = ?", (key,)
+>           ).fetchone()
+>       price = row[0] if row is not None else 100 + sum(ord(c) for c in key) % 900
+>       return f"{price} EUR"
+>   ```
+> - **Contract:** the DB must be seeded (via `launch()` → `_ensure_db()`) before
+>   any read. Because `_price()` is a pure reader, a `SELECT` against a DB with no
+>   `prices` table raises `sqlite3.OperationalError` — so a direct-call smoke check
+>   (e.g. `get_airline_price("London")`) must call `_ensure_db()` first. In the
+>   running app this is automatic: `launch()` always seeds before serving.
+> - **Threading:** one connection **per lookup**, opened and closed inside
+>   `_price()` / `_ensure_db()`. This sidesteps SQLite's default same-thread
+>   restriction (Gradio and the tool runner may call from worker threads) with no
+>   shared connection and no `check_same_thread` juggling.
+> - **Docs:** the module docstring and the README airline subsection change "a
+>   small known-city table" / "dummy … table" wording to say prices come from a
+>   **SQLite DB seeded on launch** (still placeholder data, not a real fare
+>   backend).
+>
+> The "Verification" section below is updated in-place for the SQLite change
+> (seed before the direct `_price`/tool smoke check).
+
 ## Goal
 
 Add a Gradio chat app for an airline ticket assistant, in a new module
@@ -245,8 +300,9 @@ tool and the model resolves the price in a single round-trip.
 Repo convention is no test framework — verify with import/run smoke checks:
 
 1. `import gradio_app.airline` succeeds with **no side effects** (no client built,
-   no `.env` read at import).
-2. `get_airline_price("London")` returns `"120 EUR"`; an unknown city returns a
+   no `.env` read at import, no DB file created at import).
+2. After `_ensure_db()` seeds the database (required — `_price` is a pure reader),
+   `get_airline_price("London")` returns `"120 EUR"`; an unknown city returns a
    stable `"<n> EUR"` across repeated calls; the lookup is case-insensitive.
 3. `Bot.SYSTEM` and `Bot.TOOLS` are class attributes (not `__init__` params); a
    default `Bot()`'s `.system` equals `Bot.SYSTEM`.
