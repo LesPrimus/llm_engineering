@@ -20,8 +20,10 @@
 >   `_ensure_db`/`_price`.
 > - `Bot` gains `prices: PriceStore = field(default_factory=PriceStore)`; init fields
 >   are `model, system, max_tokens, client, prices`.
-> - `get_airline_price` is no longer module-level — `Bot.chat` builds it as a
->   `@beta_tool` closure capturing `self.prices` and returning `prices.price(...)`.
+> - `get_airline_price` is no longer module-level — it is a `Bot` method
+>   `get_airline_price(self, location)` returning `self.prices.price(...)`, and
+>   `Bot.chat` wraps the bound method: `tools=[beta_tool(self.get_airline_price)]`
+>   (the bound method drops `self`, so the derived schema is `{location}`).
 > - `build_demo(bot: Bot | None = None)`; `launch()` builds the bot, calls
 >   `bot.prices.ensure_seeded()`, then `build_demo(bot)`.
 > The Task 1 code block and smoke checks below describe the earlier module-level

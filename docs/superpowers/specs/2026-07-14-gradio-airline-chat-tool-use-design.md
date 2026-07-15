@@ -56,11 +56,14 @@
 > - **`Bot` injects the store:** `prices: PriceStore = field(default_factory=PriceStore)`,
 >   alongside the existing `client` field. `Bot`'s init fields become `model`,
 >   `system`, `max_tokens`, `client`, `prices`.
-> - **The tool is bound to the store.** `get_airline_price` is no longer a
->   module-level function; `Bot.chat` builds it as a `@beta_tool` **closure** that
->   captures `self.prices` and returns `prices.price(location)`, then passes it to
->   `tool_runner(tools=[get_airline_price])`. The model-facing tool docstring (its
->   description/schema) is unchanged, so should-call behavior is preserved.
+> - **The tool is a bound method.** `get_airline_price` is no longer a module-level
+>   function; it is a `Bot` method `get_airline_price(self, location) -> str` that
+>   returns `self.prices.price(location)` (directly unit-testable and bound to the
+>   injected store). `Bot.chat` wraps the **bound** method at call time —
+>   `tool_runner(tools=[beta_tool(self.get_airline_price)])` — which derives the
+>   schema `{location}` (a bound method's signature drops `self`) and the tool name
+>   `get_airline_price` from `__name__`. The model-facing tool docstring
+>   (description/schema) is unchanged, so should-call behavior is preserved.
 >   `PriceStore` stays a pure data-access class — it has no knowledge of the tool
 >   or prompt layer.
 > - **Seeding — launch only.** `launch()` builds the bot, calls
