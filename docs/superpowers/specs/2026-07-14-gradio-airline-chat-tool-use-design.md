@@ -15,60 +15,74 @@
 > tradeoff is a dependency on the **beta** `tool_runner`/`@beta_tool` surface.
 > The sections below describe the original manual-loop design.
 
-> **Update (2026-07-15): SQLite-backed pricing.** The in-memory `_PRICES` dict is
-> replaced by a **SQLite** database that `_price()` reads. The public surface is
-> unchanged — `get_airline_price` (the `@beta_tool`) still wraps the plain
-> `_price()` core, prices for the seven seed cities are identical (`"London"` →
-> `"120 EUR"`), and unknown cities still get the deterministic char-sum fallback.
-> Only `gradio_app/airline.py` and `.gitignore` change; `sqlite3` is stdlib, so no
-> new dependency.
+> **Update (2026-07-15): SQLite-backed pricing via an injected `PriceStore`.** The
+> in-memory `_PRICES` dict is replaced by a **SQLite** database, and all database
+> concerns are encapsulated in a new **`PriceStore`** dataclass that is **injected
+> into `Bot`** — mirroring how `Bot` already owns its `Anthropic` client. The
+> user-facing behavior is unchanged: prices for the seven seed cities are identical
+> (`"London"` → `"120 EUR"`), and unknown cities still get the deterministic
+> char-sum fallback. Only `gradio_app/airline.py`, `.gitignore`, and `README.md`
+> change; `sqlite3` is stdlib, so no new dependency.
 >
-> - **DB file:** `_DB_PATH = Path(__file__).with_name("airline_prices.db")` — a
->   module constant (no I/O at import, so importing stays side-effect-free). The
->   file is **generated, not committed**; `.gitignore` gains a `# SQLite` section
->   ignoring `gradio_app/airline_prices.db`.
-> - **Schema & seed:** one table, `prices(city TEXT PRIMARY KEY, price INTEGER)`.
->   The former dict becomes `_SEED: dict[str, int]` (the same seven city→price
->   rows), used only as seed data.
-> - **Seeding — launch only.** A helper `_ensure_db()` opens a connection,
->   `CREATE TABLE IF NOT EXISTS prices (...)`, and, **only if the table is empty**,
->   `INSERT OR IGNORE`s the seed rows and commits (idempotent, race-safe).
->   `launch()` calls `_ensure_db()` once — after `load_dotenv()`, before
->   `build_demo()` — so the DB is auto-created and seeded on startup. `_price()`
->   does **not** seed.
-> - **`_price()` is a pure reader.** It opens a connection via
->   `contextlib.closing(_connect())` (a raw `sqlite3` connection used as a plain
->   context manager commits but does **not** close, so `closing` is required),
->   runs `SELECT price FROM prices WHERE city = ?` on the lowercased/stripped key,
->   and returns `"<n> EUR"` if found or the deterministic
->   `100 + sum(ord(c) for c in key) % 900` fallback otherwise. It never creates or
->   seeds the table.
->   ```python
->   def _price(location: str) -> str:
->       key = location.strip().lower()
->       with closing(_connect()) as conn:
->           row = conn.execute(
->               "SELECT price FROM prices WHERE city = ?", (key,)
->           ).fetchone()
->       price = row[0] if row is not None else 100 + sum(ord(c) for c in key) % 900
->       return f"{price} EUR"
->   ```
-> - **Contract:** the DB must be seeded (via `launch()` → `_ensure_db()`) before
->   any read. Because `_price()` is a pure reader, a `SELECT` against a DB with no
+> - **`PriceStore` dataclass** (`@dataclass(frozen=True)`) owns the file path, the
+>   connection, seeding, and the lookup:
+>   - `SEED: ClassVar[dict[str, int]]` — the same seven city→price rows (was the
+>     module dict), used only as seed data.
+>   - `DEFAULT_PATH: ClassVar[Path] = Path(__file__).with_name("airline_prices.db")`
+>     and a `path: Path = DEFAULT_PATH` field (so a test/alt DB is injectable).
+>     Building the path does no I/O, so importing the module stays side-effect-free.
+>     The DB file is **generated, not committed**; `.gitignore` gains a `# SQLite`
+>     section ignoring `gradio_app/airline_prices.db`.
+>   - `_connect()` opens one connection per call.
+>   - `ensure_seeded()` — `CREATE TABLE IF NOT EXISTS prices (city TEXT PRIMARY
+>     KEY, price INTEGER)`, then **only if the table is empty** `INSERT OR IGNORE`s
+>     the seed rows and commits (idempotent, race-safe). The **only** writer.
+>   - `price(location)` — a **pure reader**: opens a connection via
+>     `contextlib.closing(_connect())` (a raw `sqlite3` connection used as a plain
+>     context manager commits but does **not** close, so `closing` is required),
+>     runs `SELECT price FROM prices WHERE city = ?` on the lowercased/stripped
+>     key, and returns `"<n> EUR"` if found or the deterministic
+>     `100 + sum(ord(c) for c in key) % 900` fallback otherwise. Never seeds.
+>     ```python
+>     def price(self, location: str) -> str:
+>         key = location.strip().lower()
+>         with closing(self._connect()) as conn:
+>             row = conn.execute(
+>                 "SELECT price FROM prices WHERE city = ?", (key,)
+>             ).fetchone()
+>         price = row[0] if row is not None else 100 + sum(ord(c) for c in key) % 900
+>         return f"{price} EUR"
+>     ```
+> - **`Bot` injects the store:** `prices: PriceStore = field(default_factory=PriceStore)`,
+>   alongside the existing `client` field. `Bot`'s init fields become `model`,
+>   `system`, `max_tokens`, `client`, `prices`.
+> - **The tool is bound to the store.** `get_airline_price` is no longer a
+>   module-level function; `Bot.chat` builds it as a `@beta_tool` **closure** that
+>   captures `self.prices` and returns `prices.price(location)`, then passes it to
+>   `tool_runner(tools=[get_airline_price])`. The model-facing tool docstring (its
+>   description/schema) is unchanged, so should-call behavior is preserved.
+>   `PriceStore` stays a pure data-access class — it has no knowledge of the tool
+>   or prompt layer.
+> - **Seeding — launch only.** `launch()` builds the bot, calls
+>   `bot.prices.ensure_seeded()` (after `load_dotenv()`, before serving), then
+>   `build_demo(bot)`. `build_demo` gains an optional `bot: Bot | None = None`
+>   param so `launch` can seed the exact store the bot will use; it defaults to a
+>   fresh `Bot()` for import-time smoke checks. `PriceStore.price` never seeds.
+> - **Contract:** the DB must be seeded (via `launch()` → `ensure_seeded()`) before
+>   any read. Because `price()` is a pure reader, a `SELECT` against a DB with no
 >   `prices` table raises `sqlite3.OperationalError` — so a direct-call smoke check
->   (e.g. `get_airline_price("London")`) must call `_ensure_db()` first. In the
+>   (`PriceStore().price("London")`) must call `ensure_seeded()` first. In the
 >   running app this is automatic: `launch()` always seeds before serving.
-> - **Threading:** one connection **per lookup**, opened and closed inside
->   `_price()` / `_ensure_db()`. This sidesteps SQLite's default same-thread
+> - **Threading:** one connection **per call**, opened and closed inside
+>   `PriceStore._connect` usages. This sidesteps SQLite's default same-thread
 >   restriction (Gradio and the tool runner may call from worker threads) with no
 >   shared connection and no `check_same_thread` juggling.
-> - **Docs:** the module docstring and the README airline subsection change "a
->   small known-city table" / "dummy … table" wording to say prices come from a
->   **SQLite DB seeded on launch** (still placeholder data, not a real fare
->   backend).
+> - **Docs:** the module docstring and the README airline subsection say prices
+>   come from an injected `PriceStore` backed by a **SQLite DB seeded on launch**
+>   (still placeholder data, not a real fare backend).
 >
-> The "Verification" section below is updated in-place for the SQLite change
-> (seed before the direct `_price`/tool smoke check).
+> The "Verification" section below is updated in-place for the SQLite change (seed
+> the store before the direct `price()` smoke check).
 
 ## Goal
 
@@ -301,9 +315,10 @@ Repo convention is no test framework — verify with import/run smoke checks:
 
 1. `import gradio_app.airline` succeeds with **no side effects** (no client built,
    no `.env` read at import, no DB file created at import).
-2. After `_ensure_db()` seeds the database (required — `_price` is a pure reader),
-   `get_airline_price("London")` returns `"120 EUR"`; an unknown city returns a
-   stable `"<n> EUR"` across repeated calls; the lookup is case-insensitive.
+2. After `PriceStore().ensure_seeded()` seeds the database (required — `price` is a
+   pure reader), `PriceStore().price("London")` returns `"120 EUR"`; an unknown city
+   returns a stable `"<n> EUR"` across repeated calls; the lookup is
+   case-insensitive. `Bot` accepts an injected store (`Bot(prices=store)`).
 3. `Bot.SYSTEM` and `Bot.TOOLS` are class attributes (not `__init__` params); a
    default `Bot()`'s `.system` equals `Bot.SYSTEM`.
 4. `_to_messages` maps a sample `history` plus a new message to the expected

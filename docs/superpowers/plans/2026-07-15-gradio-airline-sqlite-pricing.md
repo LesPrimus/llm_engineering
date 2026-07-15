@@ -10,6 +10,24 @@
 
 **Design reference:** `docs/superpowers/specs/2026-07-14-gradio-airline-chat-tool-use-design.md` — see the **Update (2026-07-15): SQLite-backed pricing** section.
 
+> **Update (2026-07-15, during execution):** at the user's request the DB
+> operations were encapsulated in an injected **`PriceStore`** dataclass rather
+> than module-level helpers. Final shape (see the spec's updated 2026-07-15 note,
+> which is the design of record):
+> - `PriceStore` (`@dataclass(frozen=True)`) owns `SEED` (`ClassVar`), `DEFAULT_PATH`
+>   (`ClassVar`), a `path` field, `_connect()`, `ensure_seeded()` (only writer), and
+>   `price()` (pure reader). Replaces the module-level `_DB_PATH`/`_SEED`/`_connect`/
+>   `_ensure_db`/`_price`.
+> - `Bot` gains `prices: PriceStore = field(default_factory=PriceStore)`; init fields
+>   are `model, system, max_tokens, client, prices`.
+> - `get_airline_price` is no longer module-level — `Bot.chat` builds it as a
+>   `@beta_tool` closure capturing `self.prices` and returning `prices.price(...)`.
+> - `build_demo(bot: Bot | None = None)`; `launch()` builds the bot, calls
+>   `bot.prices.ensure_seeded()`, then `build_demo(bot)`.
+> The Task 1 code block and smoke checks below describe the earlier module-level
+> shape; the delivered module and its smoke checks use the `PriceStore` API
+> (`PriceStore().ensure_seeded()` / `.price(...)`, `Bot(prices=...)`).
+
 ## Global Constraints
 
 - Python >= 3.14; run everything through `uv` (`uv run …`). **No new dependencies** — `sqlite3`, `pathlib`, and `contextlib` are stdlib; `anthropic`, `gradio`, and `python-dotenv` are already in `pyproject.toml`.
