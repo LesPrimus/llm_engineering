@@ -10,9 +10,9 @@ This is the sibling of ``gradio_app/chatinterface.py`` — same self-contained
 — but it declares a tool. Prices live in an injected ``PriceStore`` dataclass that
 owns every SQLite concern (path, connection, seeding, lookup); ``Bot`` holds one
 and asks it for prices. Instead of a hand-written tool loop it uses the SDK's
-**tool runner**: ``chat`` builds a ``@beta_tool`` ``get_airline_price`` closure
-(its schema is derived from the signature and docstring) that delegates to the
-injected store, and ``client.beta.messages.tool_runner(..., stream=True)`` drives
+**tool runner**: ``chat`` wraps ``Bot``'s ``get_airline_price`` method — bound to
+the injected store — with ``beta_tool`` (its schema is derived from the signature
+and docstring), and ``client.beta.messages.tool_runner(..., stream=True)`` drives
 the loop — each iteration yields one turn's message stream, and the runner runs
 the tool and continues automatically. ``chat`` accumulates text across turns into
 one growing string so the UI never resets. The persona (``SYSTEM``) lives on
@@ -150,34 +150,32 @@ class Bot:
         messages.append(BetaMessageParam(role="user", content=message))
         return messages
 
+    def get_airline_price(self, location: str) -> str:
+        """Get the price of an airline ticket to a destination city, in euros (EUR).
+
+        Call this whenever the user asks the price or cost of a flight to a place, or
+        asks how much it is to fly somewhere.
+
+        Args:
+            location: The destination city, e.g. 'London' or 'Tokyo'.
+        """
+        return self.prices.price(location)
+
     def chat(self, message: str, history: list[dict[str, Any]]) -> Iterator[str]:
         """Stream Claude's reply to ``message``, running the price tool as needed.
 
-        Builds a ``get_airline_price`` tool bound to the injected ``PriceStore``,
-        then lets the SDK tool runner drive the loop: with ``stream=True`` each
-        iteration yields one turn's message stream, and when Claude calls the tool
-        the runner runs it and continues automatically. ``reply`` accumulates across
-        every turn so ``gr.ChatInterface`` sees one growing string and never resets.
+        Wraps the bound ``get_airline_price`` method (which reads the injected
+        ``PriceStore``) with ``beta_tool``, then lets the SDK tool runner drive the
+        loop: with ``stream=True`` each iteration yields one turn's message stream,
+        and when Claude calls the tool the runner runs it and continues
+        automatically. ``reply`` accumulates across every turn so
+        ``gr.ChatInterface`` sees one growing string and never resets.
         """
-        prices = self.prices
-
-        @beta_tool
-        def get_airline_price(location: str) -> str:
-            """Get the price of an airline ticket to a destination city, in euros (EUR).
-
-            Call this whenever the user asks the price or cost of a flight to a
-            place, or asks how much it is to fly somewhere.
-
-            Args:
-                location: The destination city, e.g. 'London' or 'Tokyo'.
-            """
-            return prices.price(location)
-
         runner = self.client.beta.messages.tool_runner(
             model=self.model,
             max_tokens=self.max_tokens,
             system=self.system,
-            tools=[get_airline_price],
+            tools=[beta_tool(self.get_airline_price)],
             messages=self._to_messages(message, history),
             stream=True,
         )
