@@ -65,16 +65,17 @@ followed.
 
 **Airline ticket chat.** A multi-turn airline-ticket assistant built on
 `gr.ChatInterface`. Ask what a flight costs and Claude calls a `get_airline_price`
-tool that returns a dummy price in euros; the reply streams back through the
-Anthropic API:
+tool that looks the price up in a small SQLite database and returns it in euros;
+the reply streams back through the Anthropic API:
 
 ```bash
 uv run python -m gradio_app.airline
 ```
 
 It reads `ANTHROPIC_API_KEY` from your `.env` (native Claude, like the
-single-model app above) — no OpenRouter key needed. Prices are placeholder data,
-not a real fare lookup.
+single-model app above) — no OpenRouter key needed. Prices are placeholder data
+in a local SQLite database (`airline_prices.db`, created and seeded on launch by
+an injected `PriceStore`), not a real fare lookup.
 
 ## Development
 
