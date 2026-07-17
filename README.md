@@ -77,6 +77,24 @@ single-model app above) — no OpenRouter key needed. Prices are placeholder dat
 in a local SQLite database (`airline_prices.db`, created and seeded on launch by
 an injected `PriceStore`), not a real fare lookup.
 
+**Airline assistant with image & voice.** A multimodal take on the airline
+assistant with three boxes — chat, a generated image of the destination city, and
+a spoken (TTS) rendering of every reply. Everything runs through a single
+OpenAI-SDK client pointed at OpenRouter: chat + function calling
+(`openai/gpt-4o-mini`), the price tool (the same SQLite dummy prices), image
+generation (`openai/gpt-image-1`), and voice (`hexgrad/kokoro-82m` TTS —
+OpenRouter has no OpenAI TTS model). Ask to fly somewhere and the bot calls
+`get_airline_price`, generates an image of that city, and speaks the reply:
+
+```bash
+uv run python -m gradio_app.airline_multimodal
+```
+
+It reads `OPENROUTER_API_KEY` from your `.env` — one key covers all three
+modalities. Self-contained (no imports from `gradio_app.airline`); the image
+(PIL) and voice (bytes) outputs are served straight from Gradio's cache, so there
+are no temp files.
+
 ## Development
 
 Formatting, linting, and type checking:

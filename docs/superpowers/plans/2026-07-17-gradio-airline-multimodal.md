@@ -1,17 +1,27 @@
 # Airline Multimodal (Image + Voice) Chat Implementation Plan
 
+> **Status (2026-07-17): implemented directly, not via the task/test flow below.** The module
+> `gradio_app/airline_multimodal.py` was written in one pass (no smoke-check tasks) at the user's
+> request, verified with `ruff` + `mypy` + live API runs. Two design points changed during
+> implementation and bug-fixing, so the delivered code is authoritative over the task code blocks:
+> (1) **TTS model** — OpenRouter exposes no OpenAI TTS model, so `TTS_MODEL = "hexgrad/kokoro-82m"`,
+> `TTS_VOICE = "af_heart"` (mp3-capable). (2) **`respond` yields a single** `(text, image, audio)`
+> tuple with audio present on **every** reply (not the staged two-yield form the tasks show). The
+> tool trigger was also broadened to fire on any named destination (e.g. "I would like to go to
+> London"), not only explicit price questions. See the design spec for the reconciled description.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add a self-contained Gradio module `gradio_app/airline_multimodal.py` — an airline-ticket assistant with a three-box UI (chat, destination image, voice) where every reply is spoken and a city image is generated whenever the price tool fires.
 
 **Architecture:** One `OpenAI` SDK client pointed at OpenRouter (single `OPENROUTER_API_KEY`) serves all three modalities: chat + function calling (`chat.completions`), TTS (`audio.speech`), and image generation (raw `POST /api/v1/images` via `httpx`, because the SDK's `images.generate()` targets a different path). Four injected `@dataclass(frozen=True)` units — `PriceStore` (SQLite prices), `ImageStudio`, `VoiceStudio`, `Bot` — keep each concern isolated and fake-injectable. `Bot.respond` hand-rolls the tool loop and yields staged `(text, image, audio)` tuples into a `gr.ChatInterface` with `additional_outputs`.
 
-**Tech Stack:** Python 3.14, `openai` SDK (pointed at OpenRouter), `httpx`, `gradio` 6, `Pillow`, `python-dotenv`, stdlib `sqlite3`/`tempfile`/`base64`/`json`.
+**Tech Stack:** Python 3.14, `openai` SDK (pointed at OpenRouter), `httpx`, `gradio` 6, `Pillow`, `python-dotenv`, stdlib `sqlite3`/`base64`/`json`.
 
 ## Global Constraints
 
 - **Provider:** OpenAI SDK with `base_url="https://openrouter.ai/api/v1"`; key from `os.environ["OPENROUTER_API_KEY"]` (via `load_dotenv()`). One provider, one key.
-- **Models (fixed constants, no dropdown):** `CHAT_MODEL = "openai/gpt-4o-mini"`, `IMAGE_MODEL = "openai/gpt-image-1"`, `TTS_MODEL = "openai/gpt-4o-mini-tts"`, `TTS_VOICE = "alloy"`.
+- **Models (fixed constants, no dropdown):** `CHAT_MODEL = "openai/gpt-4o-mini"`, `IMAGE_MODEL = "openai/gpt-image-1"`, `TTS_MODEL = "hexgrad/kokoro-82m"`, `TTS_VOICE = "af_heart"` (OpenRouter exposes no OpenAI TTS model; Kokoro is cheap and mp3-capable).
 - **Self-contained:** no imports from `gradio_app.airline` or any sibling module. `PriceStore` is re-implemented locally.
 - **No side effects at import:** `_client()` (reads the env var) and all network/DB/file work happen only on instantiation or in `launch()` — never at module top level.
 - **No test framework in this repo.** Verification is `uv run python` import/run **smoke checks** (with injected fakes), plus `ruff` + `mypy`, plus a manual run. Mirrors `gradio_app/airline.py`.
@@ -76,8 +86,8 @@ from openai import OpenAI
 
 CHAT_MODEL = "openai/gpt-4o-mini"
 IMAGE_MODEL = "openai/gpt-image-1"
-TTS_MODEL = "openai/gpt-4o-mini-tts"
-TTS_VOICE = "alloy"
+TTS_MODEL = "hexgrad/kokoro-82m"
+TTS_VOICE = "af_heart"
 
 
 def _client() -> OpenAI:
@@ -322,15 +332,9 @@ git commit -m "Add ImageStudio (OpenRouter image generation via httpx)"
 
 **Interfaces:**
 - Consumes: `_client`, `TTS_MODEL`, `TTS_VOICE`.
-- Produces: `VoiceStudio` dataclass with `client: OpenAI` field, `_write_mp3(data: bytes) -> str` (staticmethod, pure), `speech(text: str) -> str` (returns a temp `.mp3` path).
+- Produces: `VoiceStudio` dataclass with `client: OpenAI` field and `speech(text: str) -> bytes` (returns raw MP3 bytes — `gr.Audio` accepts bytes directly).
 
-- [ ] **Step 1: Extend imports, then add `VoiceStudio`.**
-
-Add this import to the existing stdlib import group:
-
-```python
-import tempfile
-```
+- [ ] **Step 1: Add `VoiceStudio` (no new imports needed).**
 
 Insert after `ImageStudio`:
 
@@ -339,52 +343,44 @@ Insert after `ImageStudio`:
 class VoiceStudio:
     """Renders text to speech via OpenRouter's OpenAI-compatible ``audio.speech`` API.
 
-    Owns its own OpenRouter client. ``speech`` writes the returned MP3 bytes to a temp
-    file and returns the path, because ``gr.Audio(type="filepath")`` wants a path.
+    Owns its own OpenRouter client. ``speech`` returns the raw MP3 ``bytes``:
+    ``gr.Audio`` accepts bytes directly and caches them itself (no temp file), matching
+    the reference notebook's ``talker`` pattern (``return response.content``).
     """
 
     client: OpenAI = field(default_factory=_client)
     model: str = TTS_MODEL
     voice: str = TTS_VOICE
 
-    @staticmethod
-    def _write_mp3(data: bytes) -> str:
-        """Write MP3 ``data`` to a temp ``.mp3`` and return its path (offline-testable)."""
-        fd, path = tempfile.mkstemp(suffix=".mp3")
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(data)
-        return path
-
-    def speech(self, text: str) -> str:
-        """Synthesize ``text`` to an MP3 file and return its path."""
+    def speech(self, text: str) -> bytes:
+        """Synthesize ``text`` to MP3 and return the raw audio bytes."""
         response = self.client.audio.speech.create(
             model=self.model,
             voice=self.voice,
             input=text,
             response_format="mp3",
         )
-        return self._write_mp3(response.content)
+        return response.content
 ```
 
-- [ ] **Step 2: Write the `_write_mp3` smoke check and run it.**
+- [ ] **Step 2: Write the `speech` smoke check (fake client, no network) and run it.**
 
 Run:
 ```bash
 cd /home/aprimus/PycharmProjects/llm_engineering
 uv run python - <<'PY'
-from pathlib import Path
+from types import SimpleNamespace as NS
 from gradio_app.airline_multimodal import VoiceStudio
 
-data = b"ID3fake-mp3-bytes"
-path = VoiceStudio._write_mp3(data)
-p = Path(path)
-assert p.exists() and p.suffix == ".mp3", path
-assert p.read_bytes() == data
-print("VoiceStudio._write_mp3 OK", path)
-p.unlink()
+# fake client: client.audio.speech.create(...) -> object with .content bytes
+fake = NS(audio=NS(speech=NS(create=lambda **kw: NS(content=b"ID3fake-mp3-bytes"))))
+studio = VoiceStudio(client=fake)  # type: ignore[arg-type]
+out = studio.speech("hello there")
+assert out == b"ID3fake-mp3-bytes", out
+print("VoiceStudio.speech OK", len(out), "bytes")
 PY
 ```
-Expected: `VoiceStudio._write_mp3 OK /tmp/....mp3`. (The networked `speech()` path is exercised in the final manual run.)
+Expected: `VoiceStudio.speech OK 17 bytes`.
 
 - [ ] **Step 3: Lint + type check.**
 
@@ -401,7 +397,7 @@ Expected: all pass.
 ```bash
 cd /home/aprimus/PycharmProjects/llm_engineering
 git add gradio_app/airline_multimodal.py
-git commit -m "Add VoiceStudio (OpenRouter TTS to temp mp3)"
+git commit -m "Add VoiceStudio (OpenRouter TTS returning mp3 bytes)"
 ```
 
 ---
@@ -446,9 +442,11 @@ class Bot:
     SYSTEM: ClassVar[str] = (
         "You are a helpful airline ticket assistant. On the customer's first message, "
         "briefly introduce yourself and ask: 'How can I help you today for your trip?' "
-        "Keep every reply short and concise — a sentence or two. When a customer asks "
-        "the price or cost of a flight to a place, call the get_airline_price tool to "
-        "look it up; never guess or invent a price. Prices are in euros (EUR)."
+        "Keep every reply short and concise — a sentence or two. Whenever the customer "
+        "names a destination they want to fly to (for example 'I would like to go to "
+        "London' or 'how much is a flight to Tokyo?'), call the get_airline_price tool "
+        "for that city and tell them the price. Never guess or invent a price. Prices "
+        "are in euros (EUR)."
     )
 
     TOOL: ClassVar[ChatCompletionFunctionToolParam] = {
@@ -684,7 +682,7 @@ git commit -m "Add Bot: price tool, message mapping, and multimodal respond loop
 - Modify: `gradio_app/airline_multimodal.py` (add `build_demo`, `launch`, `__main__` guard at the end)
 
 **Interfaces:**
-- Consumes: `Bot`, `gr`, `tempfile`.
+- Consumes: `Bot`, `gr`.
 - Produces: `build_demo(bot: Bot | None = None) -> gr.Blocks`, `launch(**kwargs: Any) -> None`.
 
 - [ ] **Step 1: Add `build_demo`, `launch`, and the entry-point guard.**
@@ -704,7 +702,7 @@ def build_demo(bot: Bot | None = None) -> gr.Blocks:
     with gr.Blocks(title="llm-engineering — airline (voice + image)") as demo:
         gr.Markdown("# Airline ticket assistant — chat, image & voice")
         image = gr.Image(label="Destination", render=False)
-        audio = gr.Audio(label="Voice", type="filepath", autoplay=True, render=False)
+        audio = gr.Audio(label="Voice", autoplay=True, render=False)
         with gr.Row():
             with gr.Column(scale=2):
                 gr.ChatInterface(
@@ -723,13 +721,14 @@ def launch(**kwargs: Any) -> None:
     """Load env, seed the price DB, build the demo, and serve.
 
     ``load_dotenv`` runs (also inside ``_client``); the bot's ``PriceStore`` is seeded
-    before serving so the first request reads a ready table. ``allowed_paths`` lets
-    Gradio serve the temp MP3 files ``VoiceStudio`` writes.
+    before serving so the first request reads a ready table. Generated image (PIL) and
+    voice (bytes) values are handled by Gradio's own cache — no temp files or
+    ``allowed_paths`` needed.
     """
     load_dotenv()
     bot = Bot()
     bot.prices.ensure_seeded()
-    build_demo(bot).launch(allowed_paths=[tempfile.gettempdir()], **kwargs)
+    build_demo(bot).launch(**kwargs)
 
 
 if __name__ == "__main__":
@@ -813,7 +812,7 @@ A multimodal airline-ticket assistant with three boxes — chat, a generated ima
 destination city, and a spoken (TTS) rendering of every reply. Everything runs through a
 single OpenAI-SDK client pointed at **OpenRouter**: chat + function calling
 (`openai/gpt-4o-mini`), the price tool (SQLite dummy prices), image generation
-(`openai/gpt-image-1`), and voice (`openai/gpt-4o-mini-tts`). Ask to fly somewhere and the
+(`openai/gpt-image-1`), and voice (`hexgrad/kokoro-82m` TTS). Ask to fly somewhere and the
 bot calls `get_airline_price`, generates an image of that city, and speaks the reply.
 
 Run it:
@@ -849,7 +848,7 @@ git commit -m "Document airline_multimodal (image + voice) app in README"
 
 1. **Import (no side effects, no key):** `uv run python -c "import gradio_app.airline_multimodal"` succeeds with no `OPENROUTER_API_KEY` set.
 2. **Lint & types:** `uv run ruff check gradio_app/airline_multimodal.py` → `All checks passed!`; `uv run mypy gradio_app/airline_multimodal.py` → `Success`.
-3. **Unit smoke checks pass:** the Task 1 (`PriceStore`), Task 2 (`ImageStudio._decode`), Task 3 (`VoiceStudio._write_mp3`), Task 4 (`respond` fakes), and Task 5 (`build_demo`) checks all print their `OK` lines.
+3. **Unit smoke checks pass:** the Task 1 (`PriceStore`), Task 2 (`ImageStudio._decode`), Task 3 (`VoiceStudio.speech`), Task 4 (`respond` fakes), and Task 5 (`build_demo`) checks all print their `OK` lines.
 4. **Manual (hits OpenRouter; needs `OPENROUTER_API_KEY` in `.env`):** `uv run python -m gradio_app.airline_multimodal`, then:
    - Type **"Hi"** → the bot introduces itself and asks *"How can I help you today for your trip?"*, and the **voice** box plays the reply. The image box stays empty.
    - Type **"I would like to go to London"** → the bot calls the tool, the reply contains **`120 EUR`**, an **image of London** appears, and the **voice** box plays the priced reply.
@@ -857,7 +856,7 @@ git commit -m "Document airline_multimodal (image + voice) app in README"
 
 ## Notes
 
-- **No new dependencies.** `openai`, `gradio`, `httpx` (transitive via `openai`), `Pillow` (transitive via `gradio`), and `python-dotenv` are already present; `sqlite3`/`tempfile`/`base64`/`json` are stdlib.
+- **No new dependencies.** `openai`, `gradio`, `httpx` (transitive via `openai`), `Pillow` (transitive via `gradio`), and `python-dotenv` are already present; `sqlite3`/`base64`/`json` are stdlib.
 - **`gradio_app/airline.py` is untouched** — this is a sibling module, and nothing imports across the two.
 - **Image path mismatch is intentional:** `ImageStudio` uses `httpx` against `/api/v1/images` rather than the SDK's `images.generate()` (which posts to `/images/generations`). If OpenRouter later aliases the SDK path, `image()` can be simplified to `self.client.images.generate(...)`.
 - **Incremental lint caveat:** `ruff` flags unused imports, so if you commit strictly per task, only import what each task uses (adding later imports as needed) — or implement Tasks 1–5 before the first commit. The Task 1 import block lists the final set.

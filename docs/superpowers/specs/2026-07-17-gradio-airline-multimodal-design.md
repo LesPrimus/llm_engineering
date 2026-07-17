@@ -17,7 +17,7 @@ three modalities, so no second client or key is needed:
 | --- | --- | --- |
 | Chat + function calling | `client.chat.completions.create(...)` | `openai/gpt-4o-mini` |
 | Image | raw `POST /api/v1/images` via `client.post("/images", ...)` | `openai/gpt-image-1` |
-| Voice (TTS) | `client.audio.speech.create(...)` (OpenAI-SDK compatible) | `openai/gpt-4o-mini-tts` |
+| Voice (TTS) | `client.audio.speech.create(...)` (OpenAI-SDK compatible) | `hexgrad/kokoro-82m` (OpenRouter has no OpenAI TTS model) |
 
 **Behavior (the target UX):**
 
@@ -44,8 +44,8 @@ re-implemented locally so the module stands alone. `airline.py` (native Anthropi
   then text, then audio). Streaming is a possible later enhancement, explicitly out of scope.
 - **No real pricing / image / voice backends.** Prices are dummy SQLite data; images and audio
   are whatever the models return. This is a toy.
-- **No persistence of generated media.** Images and audio are written to temp files for Gradio
-  to serve; they are not catalogued or cleaned up beyond the OS temp lifecycle.
+- **No persistence of generated media.** The image is returned as a PIL image and the voice as
+  raw MP3 bytes; Gradio's own cache handles serving them (no temp files). They are not catalogued.
 
 ## Providers & configuration
 
@@ -65,8 +65,9 @@ Model / voice IDs are module or `ClassVar` constants:
 
 - `CHAT_MODEL = "openai/gpt-4o-mini"`
 - `IMAGE_MODEL = "openai/gpt-image-1"`
-- `TTS_MODEL = "openai/gpt-4o-mini-tts"`
-- `TTS_VOICE = "alloy"`
+- `TTS_MODEL = "hexgrad/kokoro-82m"` (OpenRouter exposes no OpenAI TTS model; Kokoro is cheap
+  and mp3-capable)
+- `TTS_VOICE = "af_heart"` (Kokoro voices are prefixed: `af_*` female, `am_*` male)
 
 Importing the module has **no side effects**: `_client()` (which reads the env var) and all
 network/DB work happen only when a `Bot`/studio is instantiated or when `launch()` runs — never
@@ -103,23 +104,22 @@ every database concern — path, connection, seeding, lookup.
 Self-contained dataclass owning its own OpenRouter client (`client: OpenAI =
 field(default_factory=_client)`).
 
-- `image(prompt: str) -> str` — because the OpenAI SDK's `images.generate()` targets a different
-  path (`/images/generations`) than OpenRouter's Image API (`/api/v1/images`), this does a
-  **raw** low-level POST reusing the client's auth/base_url: `client.post("/images", body={
-  "model": IMAGE_MODEL, "prompt": prompt}, cast_to=...)` (exact `cast_to`/parsing pinned at
-  implementation; response carries `data[].b64_json`). It base64-decodes the first image, writes
-  it to a temp `.png` (via `tempfile`), and returns the file path for `gr.Image(type="filepath")`.
-- Prompt shape: a short travel-photo prompt built from the city, e.g. `f"A scenic travel
-  photograph of {city}."`
+- `image(city: str) -> PIL.Image.Image` — because the OpenAI SDK's `images.generate()` targets a
+  different path (`/images/generations`) than OpenRouter's Image API (`/api/v1/images`), this
+  makes a raw `httpx.post` to `{client.base_url}/images` reusing the client's key and base URL
+  (`{"model": IMAGE_MODEL, "prompt": f"A scenic travel photograph of {city}."}`; response carries
+  `data[0].b64_json`). It base64-decodes the first image and returns a **PIL image** — `gr.Image`
+  accepts a PIL image directly, so no temp file. A pure `_decode(b64_json) -> Image.Image`
+  staticmethod holds the offline-testable core.
 
 ### `VoiceStudio` — text-to-speech
 
 Self-contained dataclass owning its own OpenRouter client (`field(default_factory=_client)`).
 
-- `speech(text: str) -> str` — calls `client.audio.speech.create(model=TTS_MODEL,
-  voice=TTS_VOICE, input=text, response_format="mp3")`, writes the bytes to a temp `.mp3`
-  (`response.write_to_file(path)` or `response.content`), and returns the path for
-  `gr.Audio(type="filepath")`.
+- `speech(text: str) -> bytes` — calls `client.audio.speech.create(model=TTS_MODEL,
+  voice=TTS_VOICE, input=text, response_format="mp3")` and returns `response.content` (raw MP3
+  **bytes**). `gr.Audio` accepts bytes directly and caches them itself — no temp file. This
+  mirrors the reference notebook's `talker` (`return response.content` → `gr.Audio`).
 
 ### `Bot` — orchestrator
 
@@ -130,8 +130,9 @@ Self-contained dataclass owning its own OpenRouter client (`field(default_factor
 - Config fields: `model: str = CHAT_MODEL`, `system: str = SYSTEM`, `max_tokens: int = 1024`.
 - `SYSTEM: ClassVar[str]` — a short persona: introduce yourself on the first message and ask
   *"How can I help you today for your trip?"*, keep every reply short (a sentence or two), and
-  **always call `get_airline_price`** for the price/cost of a flight to a place — never guess.
-  Prices are in euros (EUR).
+  **call `get_airline_price` whenever the customer names a destination they want to fly to** (e.g.
+  "I would like to go to London") — not only on an explicit price question — never guess. Prices
+  are in euros (EUR).
 - **Tool.** `get_airline_price(self, location: str) -> str` is a **bound method** returning
   `self.prices.price(location)`. Its function-calling schema is a hand-written constant
   `TOOL` (`{"type": "function", "function": {"name": "get_airline_price", "description": ...,
@@ -145,10 +146,10 @@ Self-contained dataclass owning its own OpenRouter client (`field(default_factor
 
 ## Data flow — `Bot.respond`
 
-`respond(message, history)` is a generator whose yields feed `gr.ChatInterface` **plus** two
-`additional_outputs` (`image`, `audio`). Each yield is a tuple `(chat_message, image_value,
-audio_value)`. The **chat_message slot always carries the reply text** (a string); only the two
-`additional_outputs` slots use `gr.skip()` (or the box's current value) to leave a box unchanged.
+`respond(message, history)` is a generator that yields **one** tuple `(chat_message, image_value,
+audio_value)` feeding `gr.ChatInterface` **plus** two `additional_outputs` (`image`, `audio`). The
+**chat_message slot always carries the reply text** (a string); `gr.skip()` in an
+`additional_outputs` slot leaves that box unchanged.
 
 1. Build messages via `_to_messages`. First completion **with tools**:
    `client.chat.completions.create(model, messages, tools=[TOOL])`.
@@ -160,15 +161,15 @@ audio_value)`. The **chat_message slot always carries the reply text** (a string
    - Second completion **without tools** for the final text (`final_text`).
 3. **If no tool call:** `final_text` is the first completion's content and `image_value =
    gr.skip()` (image box left unchanged).
-4. Staged yields (both slots that aren't ready use `gr.skip()`):
-   - **yield** `(final_text, image_value, gr.skip())` — text and (on the tool path) the image
-     appear together.
-   - Generate voice for the final text (`self.voice.speech(final_text)`), then **yield**
-     `(final_text, image_value, audio_path)`.
+4. Generate voice for `final_text` (`self.voice.speech(final_text)` → MP3 bytes) and **yield**
+   `(final_text, image_value, audio_bytes)`.
 
-`gr.Audio(autoplay=True)` so the reply plays automatically on arrival. The image box updates only
-on a tool call (a known destination); otherwise it retains whatever was last shown. (Yielding text
-first, then audio, keeps the transcript responsive while the slower TTS renders.)
+**Voice is generated for every reply** — `audio_value` is always the reply's MP3 bytes (matching
+the reference notebook's `talker`, which returns audio on every turn), so it is never `gr.skip()`
+except when TTS itself fails. `gr.Audio(autoplay=True)` plays it on arrival. The **image** box
+updates only on a tool call (a known destination); otherwise it retains whatever was last shown.
+The single-yield shape (rather than a staged text-then-audio pair) keeps the audio output
+unambiguously present on each reply.
 
 ## UI — `build_demo(bot)`
 
@@ -228,10 +229,10 @@ fakes (a fake `OpenAI` client, fake studios) keep every check offline and key-fr
   prices (`"London"` → `"120 EUR"`); unknown cities return the stable char-sum fallback; `price`
   against an unseeded DB raises `sqlite3.OperationalError` (documents the launch-seeds-first
   contract).
-- **`ImageStudio.image`** — with a fake client whose low-level `post` returns a canned base64
-  image: asserts a real `.png` path is returned and the file contains the decoded bytes.
-- **`VoiceStudio.speech`** — with a fake speech response carrying canned bytes: asserts a `.mp3`
-  path is returned with those bytes.
+- **`ImageStudio._decode`** — feed it a base64-encoded PNG and assert it returns a PIL image of
+  the right size (the pure, offline core; the networked `image()` path is exercised manually).
+- **`VoiceStudio.speech`** — with a fake client whose `audio.speech.create` returns an object
+  carrying canned `.content` bytes: asserts `speech` returns exactly those bytes.
 - **`Bot._to_messages`** — maps system + history + new turn to OpenAI messages; drops
   metadata/empty turns.
 - **`Bot.respond`** — with a fake chat client scripted to return (a) a tool call then final text,
