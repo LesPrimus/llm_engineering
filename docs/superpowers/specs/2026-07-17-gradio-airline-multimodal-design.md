@@ -216,17 +216,22 @@ never seeds), then `build_demo(bot).launch(**kwargs)`. Run with
 - **SQLite threading** — connection-per-call in `PriceStore` satisfies the same-thread rule under
   Gradio's worker threads.
 
-## Testing (TDD)
+## Testing / verification
 
-Write tests first; use fakes so no network or key is needed.
+**No test framework in this repo** — verification is **import/run smoke checks**
+(`uv run python -c "…"`) that inject fakes, plus `ruff` + `mypy`, plus a manual API run,
+matching the existing gradio modules (and the `airline.py` plan). TDD still applies at the
+smoke-check level: write the check, watch it fail, implement, watch it pass, commit. Injected
+fakes (a fake `OpenAI` client, fake studios) keep every check offline and key-free.
 
 - **`PriceStore`** — against a temp DB: `ensure_seeded` is idempotent; seed cities return known
   prices (`"London"` → `"120 EUR"`); unknown cities return the stable char-sum fallback; `price`
-  against an unseeded DB raises (documents the launch-seeds-first contract).
-- **`ImageStudio.image`** — with a fake client whose `post` returns a canned base64 image:
-  asserts a real `.png` path is returned and the file contains the decoded bytes.
-- **`VoiceStudio.speech`** — with a fake client whose `audio.speech.create` returns canned bytes:
-  asserts a `.mp3` path is returned with those bytes.
+  against an unseeded DB raises `sqlite3.OperationalError` (documents the launch-seeds-first
+  contract).
+- **`ImageStudio.image`** — with a fake client whose low-level `post` returns a canned base64
+  image: asserts a real `.png` path is returned and the file contains the decoded bytes.
+- **`VoiceStudio.speech`** — with a fake speech response carrying canned bytes: asserts a `.mp3`
+  path is returned with those bytes.
 - **`Bot._to_messages`** — maps system + history + new turn to OpenAI messages; drops
   metadata/empty turns.
 - **`Bot.respond`** — with a fake chat client scripted to return (a) a tool call then final text,
@@ -234,10 +239,10 @@ Write tests first; use fakes so no network or key is needed.
   `prices.price`; the image is generated **only** on the tool-call path; audio is generated on
   **every** path; the yielded tuples have the right shape and `gr.skip()` where expected; a media
   exception is swallowed and the text still yields.
-- **Import-time smoke** — `build_demo(bot)` with an injected fake `Bot` builds without network or
-  key.
-- **Manual** — run the app: "Hi" → intro reply + audio; "I'd like to go to London" → priced
-  reply + a London image + audio.
+- **Import-time smoke** — importing the module has no side effects; `build_demo(bot)` with an
+  injected fake `Bot` builds a `gr.Blocks` without network or key.
+- **Manual** (hits OpenRouter; needs `OPENROUTER_API_KEY`) — run the app: "Hi" → intro reply +
+  audio; "I'd like to go to London" → priced reply + a London image + audio.
 
 ## Files
 
