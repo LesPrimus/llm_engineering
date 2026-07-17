@@ -54,10 +54,10 @@ from PIL import Image
 CHAT_MODEL = "openai/gpt-4o-mini"
 IMAGE_MODEL = "openai/gpt-image-1"
 # OpenRouter serves no OpenAI TTS model (its docs' `openai/gpt-4o-mini-tts-*` returns 400
-# "does not exist"), so use Kokoro — cheap, mp3-capable, and it has an `af_nova` voice.
-# List/choose others via GET /api/v1/models?output_modalities=speech.
-TTS_MODEL = "hexgrad/kokoro-82m"
-TTS_VOICE = "af_nova"
+# "does not exist"), so use Deepgram Aura-2 — fast, and the same voice `gradio_app.chat_voice`
+# uses. List/choose others via GET /api/v1/models?output_modalities=speech.
+TTS_MODEL = "deepgram/aura-2"
+TTS_VOICE = "aura-2-thalia-en"
 
 
 def _client() -> OpenAI:
@@ -179,18 +179,24 @@ class VoiceStudio:
     model: str = TTS_MODEL
     voice: str = TTS_VOICE
 
-    def speech(self, text: str) -> str:
-        """Synthesize ``text`` to an MP3 file and return its path."""
-        fd, path = tempfile.mkstemp(suffix=".mp3")
-        os.close(fd)
-        with self.client.audio.speech.with_streaming_response.create(
-            model=self.model,
-            voice=self.voice,
-            input=text,
-            response_format="mp3",
-        ) as response:
-            response.stream_to_file(path)
-        return path
+    def talker(self, message):
+        response = self.client.audio.speech.create(
+            model=self.model, voice=self.voice, input=message
+        )
+        return response.content
+
+    # def speech(self, text: str) -> str:
+    #     """Synthesize ``text`` to an MP3 file and return its path."""
+    #     fd, path = tempfile.mkstemp(suffix=".mp3")
+    #     os.close(fd)
+    #     with self.client.audio.speech.with_streaming_response.create(
+    #         model=self.model,
+    #         voice=self.voice,
+    #         input=text,
+    #         response_format="mp3",
+    #     ) as response:
+    #         response.stream_to_file(path)
+    #     return path
 
 
 @dataclass(frozen=True)
@@ -288,7 +294,7 @@ class Bot:
         stderr so a bad TTS model/voice is visible instead of a silently empty box.
         """
         try:
-            return self.voice.speech(text)
+            return self.voice.talker(text)
         except Exception as exc:
             print(
                 f"[airline_multimodal] speech synthesis failed: {exc}", file=sys.stderr
@@ -297,14 +303,15 @@ class Bot:
 
     def respond(
         self, message: str, history: list[dict[str, Any]]
-    ) -> Iterator[tuple[str, Any]]:
-        """Answer ``message``, running the price tool as needed, and speak the reply.
+    ) -> Iterator[tuple[str, Any, Any]]:
+        """Answer ``message``, running the price tool as needed; show a city image and speak.
 
-        Yields one ``(chat_text, audio_value)`` tuple for ``gr.ChatInterface`` + its audio
-        ``additional_output``. **Every** reply is spoken, so ``audio_value`` is the reply's
-        ``.mp3`` path (only ``gr.skip()`` if TTS fails, swallowed so it never breaks chat).
-        Image generation is temporarily sidestepped while the chat + voice flow is nailed
-        down; it will be reinstated as a third output afterward.
+        Yields one ``(chat_text, image_value, audio_value)`` tuple for ``gr.ChatInterface`` +
+        its image and audio ``additional_outputs``. **Every** reply is spoken. The **image is
+        generated only when the price tool fires** (a destination city is then known); on the
+        plain-text path ``image_value`` is ``gr.skip()``, leaving the image box unchanged.
+        Both media calls are wrapped (``_safe_image``/``_safe_speech``) so a failure yields
+        ``gr.skip()`` and never breaks the chat.
         """
         messages = self._to_messages(message, history)
         first = self.client.chat.completions.create(
@@ -315,10 +322,12 @@ class Bot:
         )
         choice = first.choices[0].message
 
+        image_value: Any = gr.skip()
         if choice.tool_calls:
             messages.append(
                 cast(ChatCompletionMessageParam, choice.model_dump(exclude_none=True))
             )
+            location = ""
             for call in choice.tool_calls:
                 if call.type != "function":
                     continue
@@ -330,6 +339,9 @@ class Bot:
                         content=self.get_airline_price(location),
                     )
                 )
+            # A destination city is now known — generate an image of it.
+            if location:
+                image_value = self._safe_image(location)
             followup = self.client.chat.completions.create(
                 model=self.model,
                 max_tokens=self.max_tokens,
@@ -339,33 +351,33 @@ class Bot:
         else:
             final_text = choice.content or ""
 
-        # Show the reply text immediately, then attach the spoken audio (TTS is slower).
-        # (Image output temporarily omitted.)
-        yield final_text, gr.skip()
-        yield final_text, self._safe_speech(final_text)
+        # One tuple: reply text, the destination image (or skip), and the spoken reply.
+        yield final_text, image_value, self._safe_speech(final_text)
 
 
 def build_demo(bot: Bot | None = None) -> gr.Blocks:
-    """Build the chat + voice UI: chat transcript (left), voice player (right).
+    """Build the chat + image + voice UI: chat (left), destination image + voice (right).
 
-    The ``audio`` component is an ``additional_output`` of the ``gr.ChatInterface``, so it
-    must exist in the ``Blocks`` context — it is defined with ``render=False`` and
-    ``.render()``-ed into the right column. Accepts an optional pre-built ``Bot`` (so
-    ``launch`` can seed its store); defaults to a fresh ``Bot``. (Image output is
-    temporarily omitted while the chat + voice flow is established.)
+    The ``image`` and ``audio`` components are ``additional_outputs`` of the
+    ``gr.ChatInterface``, so they must exist in the ``Blocks`` context — each is defined with
+    ``render=False`` and ``.render()``-ed into the right column, stacked. Their order matches
+    the trailing elements of ``respond``'s yielded tuple (``image`` then ``audio``). Accepts an
+    optional pre-built ``Bot`` (so ``launch`` can seed its store); defaults to a fresh ``Bot``.
     """
     bot = bot if bot is not None else Bot()
-    with gr.Blocks(title="llm-engineering — airline (voice)") as demo:
-        gr.Markdown("# Airline ticket assistant — chat & voice")
+    with gr.Blocks(title="llm-engineering — airline (voice + image)") as demo:
+        gr.Markdown("# Airline ticket assistant — chat, image & voice")
+        image = gr.Image(label="Destination", render=False)
         audio = gr.Audio(label="Voice", autoplay=True, render=False)
         with gr.Row():
             with gr.Column(scale=2):
                 gr.ChatInterface(
                     fn=bot.respond,
-                    additional_outputs=[audio],
+                    additional_outputs=[image, audio],
                     title="Chat",
                 )
             with gr.Column(scale=1):
+                image.render()
                 audio.render()
     return demo
 
