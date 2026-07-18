@@ -31,7 +31,7 @@ import os
 import sqlite3
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import closing
 from dataclasses import dataclass, field
 from io import BytesIO
@@ -45,6 +45,7 @@ from openai import OpenAI
 from openai.types.chat import (
     ChatCompletionFunctionToolParam,
     ChatCompletionMessageParam,
+    ChatCompletionMessageToolCall,
     ChatCompletionSystemMessageParam,
     ChatCompletionToolMessageParam,
     ChatCompletionUserMessageParam,
@@ -247,6 +248,40 @@ class Bot:
         """Return the ticket price to ``location`` (bound tool → injected store)."""
         return self.prices.price(location)
 
+    def _tools(self) -> dict[str, Callable[..., str]]:
+        """Map each tool name to the bound method that runs it (the dispatch table).
+
+        Keeps ``TOOL`` (the schema advertised to the model) and the executable behind it
+        in one place: to add a tool, register its schema and add an entry here.
+        """
+        return {"get_airline_price": self.get_airline_price}
+
+    def _execute_tool_calls(
+        self,
+        calls: list[ChatCompletionMessageToolCall],
+        messages: list[ChatCompletionMessageParam],
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Run each function tool call, appending its ``tool`` result to ``messages``.
+
+        Dispatches through ``_tools`` (unpacking the JSON arguments as keyword args),
+        appending one ``tool`` message per call so ``messages`` is ready for the followup
+        completion. Returns the ``(name, arguments)`` of each executed call so the caller
+        can react to what ran (e.g. read the destination for the image).
+        """
+        invoked: list[tuple[str, dict[str, Any]]] = []
+        for call in calls:
+            if call.type != "function":
+                continue
+            args = json.loads(call.function.arguments)
+            result = self._tools()[call.function.name](**args)
+            messages.append(
+                ChatCompletionToolMessageParam(
+                    role="tool", tool_call_id=call.id, content=result
+                )
+            )
+            invoked.append((call.function.name, args))
+        return invoked
+
     def _to_messages(
         self, message: str, history: list[dict[str, Any]]
     ) -> list[ChatCompletionMessageParam]:
@@ -327,19 +362,16 @@ class Bot:
             messages.append(
                 cast(ChatCompletionMessageParam, choice.model_dump(exclude_none=True))
             )
-            location = ""
-            for call in choice.tool_calls:
-                if call.type != "function":
-                    continue
-                location = json.loads(call.function.arguments).get("location", "")
-                messages.append(
-                    ChatCompletionToolMessageParam(
-                        role="tool",
-                        tool_call_id=call.id,
-                        content=self.get_airline_price(location),
-                    )
-                )
-            # A destination city is now known — generate an image of it.
+            invoked = self._execute_tool_calls(choice.tool_calls, messages)
+            # The price tool's `location` arg names a destination city — image it.
+            location = next(
+                (
+                    args["location"]
+                    for name, args in invoked
+                    if name == "get_airline_price" and args.get("location")
+                ),
+                "",
+            )
             if location:
                 image_value = self._safe_image(location)
             followup = self.client.chat.completions.create(
