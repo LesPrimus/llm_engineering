@@ -95,6 +95,19 @@ modalities. Self-contained (no imports from `gradio_app.airline`); the image
 (PIL) and voice (bytes) outputs are served straight from Gradio's cache, so there
 are no temp files.
 
+## Notebooks
+
+**Open-model tour** (`notebooks/hf_open_models_tour.ipynb`). Runs five open Hugging
+Face models — Llama 3.2 1B, Phi-4-mini, Gemma 3 270M, Qwen3-4B and the
+DeepSeek-R1-Distill reasoning model — against the same prompt, at the tokenizer /
+`AutoModelForCausalLM` level rather than behind a `pipeline`. Each is loaded in
+4-bit and freed again before the next, so all five fit comfortably.
+
+Built for **Google Colab on a T4 GPU**, not for local execution — open it via
+*File → Open notebook → GitHub*, or upload it. It needs an `HF_TOKEN` in Colab's
+secrets and accepted licences for the two gated models (Llama 3.2 and Gemma 3);
+the other three run without a token. The notebook's first cell walks through both.
+
 ## Development
 
 Formatting, linting, and type checking:
