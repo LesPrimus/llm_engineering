@@ -6,3 +6,8 @@ repos:
         entry: uv run ruff format
         language: system
         types_or: [python, jupyter]
+      - id: nbstripout
+        name: nbstripout
+        entry: uv run nbstripout
+        language: system
+        types: [jupyter]
