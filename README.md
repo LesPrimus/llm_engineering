@@ -108,6 +108,24 @@ Built for **Google Colab on a T4 GPU**, not for local execution — open it via
 secrets and accepted licences for the two gated models (Llama 3.2 and Gemma 3);
 the other three run without a token. The notebook's first cell walks through both.
 
+**Python → Rust** (`notebooks/python_to_rust.ipynb`). Claude Opus 5
+(`anthropic/claude-opus-5`) and GPT-5 (`openai/gpt-5`), both through OpenRouter, are
+asked to rewrite a Python program as a single-file Rust program with identical
+output. Each port is streamed into `rust_build/main.rs`, compiled with `rustc
+-Copt-level=3 -Ctarget-cpu=native`, and run three times, so the comparison is a
+measured speedup rather than a plausible-looking diff. The worked example is a
+200M-term series for π; the program is just a string, so any self-contained Python
+that prints deterministic output can take its place.
+
+Unlike the tour above this one runs **locally**, and it needs two things Colab would
+have provided: an `OPENROUTER_API_KEY` in `.env`, and a Rust toolchain on your `PATH`
+(install from [rustup.rs](https://rustup.rs)). Generated Rust lands in `rust_build/`,
+which is gitignored.
+
+```bash
+uv run jupyter lab notebooks/python_to_rust.ipynb
+```
+
 ## Development
 
 Formatting, linting, and type checking:
@@ -116,6 +134,13 @@ Formatting, linting, and type checking:
 uv run ruff format .
 uv run ruff check .
 uv run mypy main.py
+```
+
+JupyterLab is a dev dependency, so the notebooks that run locally need no separate
+install:
+
+```bash
+uv run jupyter lab
 ```
 
 A pre-commit hook formats staged Python files with ruff. Enable it once per clone:
