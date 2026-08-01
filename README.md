@@ -95,6 +95,44 @@ modalities. Self-contained (no imports from `gradio_app.airline`); the image
 (PIL) and voice (bytes) outputs are served straight from Gradio's cache, so there
 are no temp files.
 
+## RAG
+
+The `rag` package is the smallest thing that is still retrieval-augmented
+generation: for each question it looks up the documents whose names appear in
+it, pastes them into the system prompt, and lets the model answer from that
+context alone. No embeddings, no vector store, no chunking — the point is the
+augmentation step, not the retriever.
+
+```bash
+uv run python -m rag.chat
+```
+
+Run it from the project root. `rag/chat.py` imports the knowledge base
+absolutely (`rag.knowledge_base`), so the file also runs as a plain script from
+an IDE run button — PyCharm puts the content root on `PYTHONPATH` by default. A
+bare `python rag/chat.py` from the shell does not, and needs
+`PYTHONPATH=. python rag/chat.py` or the `-m` form above.
+
+It reads `OPENROUTER_API_KEY` from your `.env` and routes the chat through
+OpenRouter (`anthropic/claude-sonnet-4.5` by default — change `Bot.model` for
+another model ID).
+
+The knowledge base is `rag/knowledge-base/`, Markdown files under `company/`,
+`employees/`, and `products/` describing Fretwork, a fictional online guitar
+store. Each document is keyed by the words in its own filename, so
+`employees/Lena Okafor.md` is retrieved by "lena" or "okafor" and
+`products/Meridian.md` by "meridian"; retrieval is a set intersection between
+those keys and the words of the question. Drop another Markdown file into one of
+those folders and it is retrievable by its filename immediately.
+
+Every reply cites the documents that were retrieved for it, so it is visible
+when an answer is grounded and when the model was working blind — and the
+retriever's limits are visible too. A question that names nothing in the
+knowledge base retrieves nothing, and so does a follow-up that leans on a
+pronoun ("what does she work on?"), because retrieval sees only the new message.
+With an empty context the model is told so, and should say it doesn't know
+rather than invent a price.
+
 ## Notebooks
 
 **Open-model tour** (`notebooks/hf_open_models_tour.ipynb`). Runs five open Hugging
