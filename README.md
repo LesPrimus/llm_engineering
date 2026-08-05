@@ -97,11 +97,17 @@ are no temp files.
 
 ## RAG
 
-The `rag` package is the smallest thing that is still retrieval-augmented
-generation: for each question it looks up the documents whose names appear in
-it, pastes them into the system prompt, and lets the model answer from that
-context alone. No embeddings, no vector store, no chunking — the point is the
-augmentation step, not the retriever.
+The `rag` package holds two retrievers over the same knowledge base — a keyword
+one and a vector one — behind two otherwise identical chat apps, so the
+difference the retriever makes is the only thing that changes.
+
+### Keyword retrieval
+
+`rag.chat` is the smallest thing that is still retrieval-augmented generation:
+for each question it looks up the documents whose names appear in it, pastes
+them into the system prompt, and lets the model answer from that context alone.
+No embeddings, no vector store, no chunking — the point is the augmentation
+step, not the retriever.
 
 ```bash
 uv run python -m rag.chat
@@ -132,6 +138,46 @@ knowledge base retrieves nothing, and so does a follow-up that leans on a
 pronoun ("what does she work on?"), because retrieval sees only the new message.
 With an empty context the model is told so, and should say it doesn't know
 rather than invent a price.
+
+### Vector retrieval
+
+`rag.vector_chat` is the same app with an actual retriever underneath, built on
+LangChain: every document is split into overlapping ~1000-character chunks,
+embedded locally with sentence-transformers `all-MiniLM-L6-v2`, and stored in
+Chroma on disk. A question retrieves the five nearest chunks by cosine
+similarity, so it no longer has to name the document it wants — "what happens if
+I don't get on with the guitar I ordered?" finds the returns policy, and "who
+should I ask about pricing?" finds Ruth Feldman.
+
+Build the store once, then chat:
+
+```bash
+uv run python -m rag.vector_store   # ~40 chunks, seconds
+uv run python -m rag.vector_chat
+```
+
+Rebuild after editing the knowledge base — the build drops the old collection
+first, so it never leaves stale chunks behind. The store lands in
+`rag/vector_db/` and is git-ignored: it is derived data.
+
+The LLM is OpenRouter again, this time through LangChain's `ChatOpenAI` pointed
+at `https://openrouter.ai/api/v1` — OpenRouter speaks the OpenAI wire protocol,
+so the base URL plus `OPENROUTER_API_KEY` is the whole integration, and any
+model on OpenRouter is one string away (`MODEL` in `rag/vector_chat.py`).
+Embeddings stay local, so only the question and the retrieved chunks leave the
+machine.
+
+Embedding runs on the GPU when torch has kernels for it and on the CPU when it
+does not — `vector_store.device()` compares the card's compute capability
+against `torch.cuda.get_arch_list()`, because `torch.cuda.is_available()` also
+returns true for a GPU too old for the installed wheels, and that only shows up
+as `no kernel image is available` partway through indexing.
+
+Replies cite documents rather than chunks, de-duplicated in rank order, so the
+citation line stays readable when several chunks come from one file. Retrieval
+still runs against the new message alone, so a follow-up like "and in blue?"
+searches for those words on their own — similarity search is more forgiving than
+keyword matching, but it is not a query rewriter.
 
 ## Notebooks
 
