@@ -16,9 +16,12 @@ The pipeline is the usual four steps:
    per-token cost, and the vectors never leave the machine;
 4. persist the lot to Chroma on disk, so the chat app starts instantly.
 
-Documents are loaded with :mod:`pathlib` rather than LangChain's
-``DirectoryLoader``, which lives in ``langchain-community`` — a large dependency
-for what is four lines of file reading.
+Loading goes through LangChain's ``DirectoryLoader`` and ``TextLoader`` rather
+than reading the files directly. For flat Markdown that is more machinery than
+``Path.read_text`` needs, but ``loader_cls`` is the extension point that makes
+the rest of the pipeline source-agnostic: indexing PDFs alongside the Markdown
+is ``loader_cls=PyPDFLoader`` and nothing else changes, because everything
+downstream only sees ``Document`` objects.
 
 Build or rebuild the store with ``uv run python -m rag.vector_store``; it is
 cheap (seconds) and idempotent, dropping any existing collection first.
@@ -31,6 +34,7 @@ from pathlib import Path
 import torch
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
+from langchain_community.document_loaders import DirectoryLoader, TextLoader
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -54,25 +58,36 @@ CHUNK_OVERLAP = 200
 def load_documents(root: Path = KNOWLEDGE_BASE) -> list[Document]:
     """Read every ``*.md`` one level below ``root`` into a LangChain document.
 
-    Each document carries three pieces of metadata: ``source`` (the path),
-    ``doc_type`` (the containing folder — ``company``, ``employees``,
-    ``products``), and ``name`` (the ``employees/Lena Okafor`` label a reply
-    cites the chunk by).
+    One ``DirectoryLoader`` per category folder, because the folder name is the
+    only place the category is recorded — the loaders know nothing about that
+    convention, so ``doc_type`` and ``name`` are attached afterwards. ``source``
+    comes from ``TextLoader`` itself.
+
+    ``name`` is the ``employees/Lena Okafor`` label a reply cites the chunk by;
+    ``doc_type`` is ``company``, ``employees``, or ``products``.
+
+    Both the folders and the files within them are sorted: ``DirectoryLoader``
+    globs in filesystem order, which would make the contents of the store — and
+    so the ids Chroma assigns — differ between machines for no reason.
     """
-    paths = sorted(root.glob("*/*.md"))
-    if not paths:
-        raise FileNotFoundError(f"no Markdown documents under {root}")
-    return [
-        Document(
-            page_content=path.read_text(encoding="utf-8"),
-            metadata={
-                "source": str(path),
-                "doc_type": path.parent.name,
-                "name": f"{path.parent.name}/{path.stem}",
-            },
+    folders = sorted(path for path in root.iterdir() if path.is_dir())
+    documents: list[Document] = []
+    for folder in folders:
+        loader = DirectoryLoader(
+            str(folder),
+            glob="**/*.md",
+            loader_cls=TextLoader,
+            loader_kwargs={"encoding": "utf-8"},
         )
-        for path in paths
-    ]
+        for document in sorted(loader.load(), key=lambda d: d.metadata["source"]):
+            document.metadata["doc_type"] = folder.name
+            document.metadata["name"] = (
+                f"{folder.name}/{Path(document.metadata['source']).stem}"
+            )
+            documents.append(document)
+    if not documents:
+        raise FileNotFoundError(f"no Markdown documents under {root}")
+    return documents
 
 
 def split_documents(documents: list[Document]) -> list[Document]:
