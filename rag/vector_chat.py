@@ -47,10 +47,19 @@ from rag.vector_store import open_store
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MODEL = "anthropic/claude-sonnet-4.5"
 
-# How many chunks to put in front of the model. Low enough that the context
-# stays mostly relevant, high enough that a question spanning two documents
-# ("is the Skylark or the Driftwood better for small hands?") sees both.
+# How many chunks the new message retrieves on its own. Low enough that the
+# context stays mostly relevant, high enough that a question spanning two
+# documents ("is the Skylark or the Driftwood better for small hands?") sees
+# both.
 K = 5
+
+# How deep the conversation-wide search goes, for a follow-up that dropped its
+# subject. Most of its top hits are ones the message already found, so the
+# useful result sits below them: at 3 the two searches overlap completely and
+# nothing is added, and 4 is where the document the follow-up is actually about
+# starts coming back. Going deeper only adds noise on questions that needed no
+# context in the first place.
+K_CONVERSATION = 4
 
 # Marks the citation line appended to each reply. It is stripped back off when a
 # reply is replayed as history, so the model never sees its own footers.
@@ -138,19 +147,52 @@ class Bot:
         messages.append(HumanMessage(content=message))
         return messages
 
+    def _retrieve(
+        self, message: str, history: Sequence[dict[str, Any]]
+    ) -> list[Document]:
+        """Search twice — for the new message, and for the conversation — and merge.
+
+        A follow-up that drops its subject ("does it come in blue?") retrieves
+        nothing useful on its own, because the words that would find the right
+        document are two turns back. Searching the questions asked so far,
+        joined together, recovers them.
+
+        It cannot be the only search, though. One query is one vector, so a long
+        history dilutes the new question until it stops steering the result: ask
+        "how do I apply for a job?" after six questions about guitars and the
+        joined query returns five product chunks and no ``company/Careers`` at
+        all. Running both searches and merging keeps the new message's own best
+        matches at the front, and treats the conversation-wide hits as extras.
+
+        Order is preserved and duplicates dropped by chunk id, so the nearest
+        match to what was actually asked stays first in the context.
+        """
+        documents = self.retriever.invoke(message)
+        questions = [
+            turn["content"]
+            for turn in history
+            if turn.get("role") == "user" and isinstance(turn.get("content"), str)
+        ]
+        if not questions:
+            return documents
+        seen = {document.id for document in documents}
+        conversation = " ".join([*questions, message])
+        for document in self.retriever.vectorstore.similarity_search(
+            conversation, k=K_CONVERSATION
+        ):
+            if document.id not in seen:
+                seen.add(document.id)
+                documents.append(document)
+        return documents
+
     def chat(self, message: str, history: list[dict[str, Any]]) -> Iterator[str]:
         """Retrieve chunks for ``message``, then stream the grounded answer.
 
         Yields the reply accumulated so far on each chunk, so
         ``gr.ChatInterface`` renders it as it arrives, then one final time with
         the retrieved documents cited underneath.
-
-        Retrieval runs against the new message only — not the history — so a
-        follow-up phrased as "and in blue?" searches for those words alone.
-        Similarity search is more forgiving of that than keyword matching, but
-        it is not a rewriter: it still finds whatever the words are near.
         """
-        documents = self.retriever.invoke(message)
+        documents = self._retrieve(message, history)
         reply = ""
         for chunk in self.llm.stream(self._messages(message, history, documents)):
             reply += chunk.text
