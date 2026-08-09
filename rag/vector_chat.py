@@ -66,8 +66,13 @@ K_CONVERSATION = 4
 SOURCES_PREFIX = "\n\n---\n_Context: "
 
 
-def _retriever(k: int = K) -> VectorStoreRetriever:
-    """Open the persisted store and wrap it as a top-``k`` retriever."""
+def open_retriever(k: int = K) -> VectorStoreRetriever:
+    """Open the persisted store and wrap it as a top-``k`` retriever.
+
+    Public because ``k`` is a knob worth sweeping rather than a constant worth
+    trusting: :mod:`rag.evaluation` builds a retriever per value of ``k`` and
+    scores each one against the labelled question set.
+    """
     return open_store().as_retriever(search_kwargs={"k": k})
 
 
@@ -102,9 +107,13 @@ class Bot:
         "\n\nContext:\n\n{context}"
     )
 
-    retriever: VectorStoreRetriever = field(default_factory=_retriever)
+    retriever: VectorStoreRetriever = field(default_factory=open_retriever)
     llm: ChatOpenAI = field(default_factory=_llm)
     system: str = SYSTEM
+    # A field rather than a constant read straight from the module, so the
+    # depth of the conversation-wide search can be varied and measured. ``k``
+    # itself lives on the retriever, and moves via ``open_retriever(k)``.
+    k_conversation: int = K_CONVERSATION
 
     def _system_message(self, documents: Sequence[Document]) -> str:
         """Fill the persona template with the retrieved chunks.
@@ -147,7 +156,7 @@ class Bot:
         messages.append(HumanMessage(content=message))
         return messages
 
-    def _retrieve(
+    def retrieve(
         self, message: str, history: Sequence[dict[str, Any]]
     ) -> list[Document]:
         """Search twice — for the new message, and for the conversation — and merge.
@@ -166,6 +175,11 @@ class Bot:
 
         Order is preserved and duplicates dropped by chunk id, so the nearest
         match to what was actually asked stays first in the context.
+
+        Public, because this — not ``self.retriever`` on its own — is what
+        retrieval actually means here, and it is what :mod:`rag.evaluation`
+        scores. Measuring the bare retriever would miss the second search
+        entirely, which is the whole of how a follow-up finds its subject.
         """
         documents = self.retriever.invoke(message)
         questions = [
@@ -178,7 +192,7 @@ class Bot:
         seen = {document.id for document in documents}
         conversation = " ".join([*questions, message])
         for document in self.retriever.vectorstore.similarity_search(
-            conversation, k=K_CONVERSATION
+            conversation, k=self.k_conversation
         ):
             if document.id not in seen:
                 seen.add(document.id)
@@ -192,7 +206,7 @@ class Bot:
         ``gr.ChatInterface`` renders it as it arrives, then one final time with
         the retrieved documents cited underneath.
         """
-        documents = self._retrieve(message, history)
+        documents = self.retrieve(message, history)
         reply = ""
         for chunk in self.llm.stream(self._messages(message, history, documents)):
             reply += chunk.text
