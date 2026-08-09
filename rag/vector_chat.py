@@ -76,7 +76,13 @@ def open_retriever(k: int = K) -> VectorStoreRetriever:
     return open_store().as_retriever(search_kwargs={"k": k})
 
 
-def _llm(model: str = MODEL) -> ChatOpenAI:
+def open_llm(model: str = MODEL) -> ChatOpenAI:
+    """Build a temperature-0 chat model on OpenRouter.
+
+    Public and parameterised by ``model`` because the whole of the OpenRouter
+    integration is here: :mod:`rag.judge` grades with a different model and
+    needs the same wiring, and one string is the difference between them.
+    """
     # Load .env here so OPENROUTER_API_KEY is present. ChatOpenAI would
     # otherwise reach for OPENAI_API_KEY, so both the key and the base URL are
     # passed explicitly rather than left to the default resolution.
@@ -108,7 +114,7 @@ class Bot:
     )
 
     retriever: VectorStoreRetriever = field(default_factory=open_retriever)
-    llm: ChatOpenAI = field(default_factory=_llm)
+    llm: ChatOpenAI = field(default_factory=open_llm)
     system: str = SYSTEM
     # A field rather than a constant read straight from the module, so the
     # depth of the conversation-wide search can be varied and measured. ``k``
