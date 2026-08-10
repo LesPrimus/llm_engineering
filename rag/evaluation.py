@@ -17,11 +17,11 @@ chunk ids are an artefact of ``CHUNK_SIZE`` — they change on every rebuild,
 and ground truth that rots whenever a knob moves cannot be used to test that
 knob.
 
-Four numbers come out, measured at deliberately different granularities:
+Five numbers come out, measured at deliberately different granularities:
 
 ``hit``
-    Did any labelled document come back at all? The coarsest of the four, and
-    the one that separates broken retrieval from merely imprecise retrieval.
+    Did any labelled document come back at all? The coarsest of them, and the
+    one that separates broken retrieval from merely imprecise retrieval.
 ``recall``
     What fraction of the labelled documents came back. A ``cross`` case
     labelled with two documents scores 0.5 when only one arrives — which is
@@ -30,6 +30,12 @@ Four numbers come out, measured at deliberately different granularities:
     One over the rank of the first chunk from a labelled document, counting
     from one: first is 1.0, fifth is 0.2, absent is 0.0. Rank is counted over
     chunks rather than documents because chunks are the order the model reads.
+``ndcg``
+    What ``mrr`` refuses to look at: the position of *every* labelled document,
+    not only the best-placed one. A ``cross`` case that ranks one label first
+    and buries the other in fifth scores a perfect 1.0 on ``mrr``, because
+    ``mrr`` stopped reading after the first hit; ``ndcg`` charges for the
+    second. See :func:`_ndcg` for how the two halves of the name work.
 ``precision``
     The fraction of retrieved *chunks* that came from a labelled document.
     Chunk-level on purpose: for one question the context window is the whole
@@ -38,7 +44,7 @@ Four numbers come out, measured at deliberately different granularities:
     the one right document, which is a good outcome and not a bad one.
 
 ``refusal`` cases carry no labels, because nothing in the knowledge base
-answers them. None of the four are defined without labels, so :func:`score`
+answers them. None of them are defined without labels, so :func:`score`
 refuses to score one and :func:`evaluate` passes over them. What they retrieve
 is still worth looking at — they return a full set of chunks like every other
 question, confidently and irrelevantly — so :func:`retrieve` takes them
@@ -52,6 +58,7 @@ store first if it does not exist yet.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from math import log2
 from pathlib import Path
 from typing import Literal
 
@@ -104,19 +111,21 @@ class Retrieval(BaseModel):
     recall: float
     precision: float
     mrr: float
+    ndcg: float
     # Labelled documents that did not come back — the readable half of a low
     # recall score, and where a sweep gets its next hypothesis from.
     missing: list[str]
 
 
 class Summary(BaseModel):
-    """The four numbers averaged over a set of scored cases."""
+    """The five numbers averaged over a set of scored cases."""
 
     cases: int
     hit_rate: float
     recall: float
     precision: float
     mrr: float
+    ndcg: float
 
 
 def load_cases(path: Path = EVAL_CASES, root: Path = KNOWLEDGE_BASE) -> list[Case]:
@@ -163,11 +172,45 @@ def retrieve(bot: Bot, case: Case) -> list[str]:
     return [document.metadata.get("name", "unknown") for document in documents]
 
 
+def _ndcg(retrieved: Sequence[str], gold: set[str]) -> float:
+    """Normalised discounted cumulative gain: where *every* label landed.
+
+    Read the name backwards. The *gain* is 1 for a labelled document and 0 for
+    anything else — binary here, where general information retrieval often
+    grades relevance 0 to 3. It is *discounted* by ``log2(rank + 1)``, so a
+    label found third is worth 0.50 and one found fifth 0.39; the log makes
+    that penalty gentle, because falling from first to second matters more
+    than falling from ninth to tenth. *Cumulative* is the sum of those across
+    the whole list rather than a stop at the first hit, which is the one thing
+    ``mrr`` will not do. And it is *normalised* by the score the perfect
+    ordering would have earned — every label at the top, nothing in between —
+    which puts a one-label case and a two-label case on the same 0 to 1 scale
+    so they can be averaged together.
+
+    Gain is counted once per labelled *document*, at the rank of its first
+    chunk. Counting every chunk would let three chunks of one document earn
+    more than the ideal ordering allows and push the result past 1.0, and it
+    would quietly re-measure precision rather than ranking.
+
+    Because the ideal is built from ``gold`` rather than from what was
+    actually found, a label that never came back costs its whole share and
+    cannot be recovered by ranking the others well. So this reads as coverage
+    *and* placement together, where ``recall`` is coverage alone.
+    """
+    ranks: dict[str, int] = {}
+    for rank, name in enumerate(retrieved, start=1):
+        if name in gold and name not in ranks:
+            ranks[name] = rank
+    gain = sum(1 / log2(rank + 1) for rank in ranks.values())
+    ideal = sum(1 / log2(position + 1) for position in range(1, len(gold) + 1))
+    return gain / ideal
+
+
 def score(case: Case, retrieved: Sequence[str]) -> Retrieval:
     """Score one case's retrieved document names against its labels.
 
     ``retrieved`` is what :func:`retrieve` returned — one name per chunk, in
-    rank order. An empty ``retrieved`` scores zero on all four rather than
+    rank order. An empty ``retrieved`` scores zero on all five rather than
     dividing by zero.
     """
     if not case.sources:
@@ -190,6 +233,7 @@ def score(case: Case, retrieved: Sequence[str]) -> Retrieval:
             else 0.0
         ),
         mrr=1 / rank if rank else 0.0,
+        ndcg=_ndcg(retrieved, gold),
         missing=sorted(gold - found),
     )
 
@@ -204,7 +248,7 @@ def evaluate(bot: Bot, cases: Iterable[Case]) -> list[Retrieval]:
 
 
 def summarise(scores: Sequence[Retrieval]) -> Summary:
-    """Average the four numbers over ``scores``.
+    """Average the five numbers over ``scores``.
 
     Every case weighs the same, whatever its kind and however many documents it
     is labelled with. That is a choice, and it is why :func:`by_kind` exists:
@@ -220,6 +264,7 @@ def summarise(scores: Sequence[Retrieval]) -> Summary:
         recall=sum(result.recall for result in scores) / total,
         precision=sum(result.precision for result in scores) / total,
         mrr=sum(result.mrr for result in scores) / total,
+        ndcg=sum(result.ndcg for result in scores) / total,
     )
 
 
@@ -251,19 +296,23 @@ def main() -> None:
     unlabelled = len(cases) - len(scores)
     print(f"{len(scores)} labelled cases scored, {unlabelled} refusal cases skipped\n")
 
-    columns = f"{'kind':<10}{'n':>4}{'hit':>8}{'recall':>8}{'prec':>8}{'mrr':>8}"
+    columns = (
+        f"{'kind':<10}{'n':>4}{'hit':>8}{'recall':>8}{'prec':>8}{'mrr':>8}{'ndcg':>8}"
+    )
     print(columns)
     print("-" * len(columns))
     for kind, summary in by_kind(scores).items():
         print(
             f"{kind:<10}{summary.cases:>4}{summary.hit_rate:>8.2f}"
             f"{summary.recall:>8.2f}{summary.precision:>8.2f}{summary.mrr:>8.2f}"
+            f"{summary.ndcg:>8.2f}"
         )
     overall = summarise(scores)
     print("-" * len(columns))
     print(
         f"{'all':<10}{overall.cases:>4}{overall.hit_rate:>8.2f}"
         f"{overall.recall:>8.2f}{overall.precision:>8.2f}{overall.mrr:>8.2f}"
+        f"{overall.ndcg:>8.2f}"
     )
 
     incomplete = [result for result in scores if result.recall < 1]
