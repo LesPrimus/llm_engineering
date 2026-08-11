@@ -174,10 +174,54 @@ returns true for a GPU too old for the installed wheels, and that only shows up
 as `no kernel image is available` partway through indexing.
 
 Replies cite documents rather than chunks, de-duplicated in rank order, so the
-citation line stays readable when several chunks come from one file. Retrieval
-still runs against the new message alone, so a follow-up like "and in blue?"
-searches for those words on their own — similarity search is more forgiving than
-keyword matching, but it is not a query rewriter.
+citation line stays readable when several chunks come from one file. Each
+question is searched for twice — once on its own, and once against the whole
+conversation joined together — and the two result sets are merged in rank order,
+so a follow-up like "and in blue?" can still find the document whose name is two
+turns back without the new question losing its own best matches.
+
+### Evaluating it
+
+Two questions, measured separately: did the right documents come back, and did
+the model then use them?
+
+`rag.evaluation` answers the first, against 32 hand-written cases in
+`rag/eval_cases.jsonl`. Nothing is generated and the same question returns the
+same chunks every time, so it costs nothing to run and a sweep over settings
+costs seconds. Five numbers come out — hit rate, recall, precision, MRR and nDCG
+— reported per kind of case, because `single`, `followup`, `cross` and `refusal`
+are not equally hard and averaging them together hides the failures.
+
+`rag.judge` answers the second, and this one spends money: each case is answered
+by the bot for real and graded by a *different* model (`google/gemini-2.5-pro`
+grading `anthropic/claude-sonnet-4.5`, because a model marking its own homework
+grades generously). It returns four booleans per case. `correct` and `grounded`
+are deliberately separate: a reply that is right but ungrounded came from the
+model's pretraining rather than from the retrieved context, which means
+retrieval is not doing the work and the case will turn into a confident wrong
+answer the day the knowledge base disagrees with the model.
+
+```bash
+uv run python -m rag.evaluation   # free
+uv run python -m rag.judge        # ~71 model calls over the full set
+```
+
+`rag.eval_app` puts both behind a Gradio dashboard, which is where the knobs
+become legible:
+
+```bash
+uv run python -m rag.eval_app
+```
+
+The **Retrieval** tab has `k` and `k_conversation` as sliders and a sweep that
+scores every `k` from 1 to 12 and plots the five metrics against it — recall
+climbing to a plateau while precision falls away, which is the trade the setting
+actually is. The whole sweep is free. The **Answers** tab picks which kinds to
+grade before spending anything, says how many model calls the run will cost, and
+streams rows in as each case is judged rather than making you wait for the run
+to end. The **Cases** tab is the labelled set itself.
+
+Both tabs need `OPENROUTER_API_KEY`, and the store built, before they will start.
 
 ## Notebooks
 
