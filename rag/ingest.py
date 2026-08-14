@@ -5,6 +5,8 @@ Requires Python 3.12+ for itertools.batched.
 """
 
 import asyncio
+import os
+from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
 
@@ -18,12 +20,18 @@ from tqdm.asyncio import tqdm_asyncio
 
 load_dotenv(override=True)
 
-MODEL = "openai/gpt-4.1-nano"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Both models are OpenRouter slugs. LiteLLM needs the "openrouter/" prefix to
+# pick the provider (bare "openai/..." would send this straight to OpenAI); the
+# embedding client below is pointed at OpenRouter by base_url instead, so it
+# takes the slug as OpenRouter itself spells it.
+MODEL = "openrouter/openai/gpt-4.1-nano"
 DB_NAME = str(Path(__file__).parent.parent / "preprocessed_db")
 collection_name = "docs"
-embedding_model = "text-embedding-3-large"
-KNOWLEDGE_BASE_PATH = Path(__file__).parent.parent / "knowledge-base"
-AVERAGE_CHUNK_SIZE = 100
+embedding_model = "openai/text-embedding-3-large"
+KNOWLEDGE_BASE_PATH = Path(__file__).parent / "knowledge-base"
+AVERAGE_CHUNK_SIZE = 1000
 
 wait = wait_exponential(multiplier=1, min=10, max=240)
 
@@ -31,7 +39,21 @@ CHUNK_CONCURRENCY = 3
 EMBED_CONCURRENCY = 4
 EMBED_BATCH = 200
 
-async_openai = AsyncOpenAI()
+# OpenRouter serves embeddings on the same OpenAI-compatible wire protocol, so
+# base_url plus a key is the whole integration. The SDK's default env var is
+# OPENAI_API_KEY, which this project never sets, so resolve OpenRouter's
+# explicitly — load_dotenv above has already put it in the environment.
+async_openai = AsyncOpenAI(
+    base_url=OPENROUTER_BASE_URL,
+    api_key=os.environ["OPENROUTER_API_KEY"],
+)
+
+
+@dataclass(frozen=True, slots=True)
+class Document:
+    type: str
+    source: str
+    text: str
 
 
 class Result(BaseModel):
@@ -54,7 +76,7 @@ class Chunk(BaseModel):
     )
 
     def as_result(self, document):
-        metadata = {"source": document["source"], "type": document["type"]}
+        metadata = {"source": document.source, "type": document.type}
         return Result(
             page_content=f"{self.headline}\n\n{self.summary}\n\n{self.original_text}",
             metadata=metadata,
@@ -67,24 +89,22 @@ class Chunks(BaseModel):
 
 def fetch_documents():
     """A homemade version of the LangChain DirectoryLoader"""
-    documents = []
     for folder in KNOWLEDGE_BASE_PATH.iterdir():
         doc_type = folder.name
         for file in folder.rglob("*.md"):
-            with open(file, "r", encoding="utf-8") as f:
-                documents.append(
-                    {"type": doc_type, "source": file.as_posix(), "text": f.read()}
-                )
-    print(f"Loaded {len(documents)} documents")
-    return documents
+            yield Document(
+                type=doc_type,
+                source=file.as_posix(),
+                text=file.read_text(encoding="utf-8"),
+            )
 
 
 def make_prompt(document):
-    how_many = (len(document["text"]) // AVERAGE_CHUNK_SIZE) + 1
+    how_many = (len(document.text) // AVERAGE_CHUNK_SIZE) + 1
     return f"""You take a document and you split the document into overlapping chunks for a KnowledgeBase.
 The document is from the shared drive of a company called Insurellm.
-The document is of type: {document["type"]}
-The document has been retrieved from: {document["source"]}
+The document is of type: {document.type}
+The document has been retrieved from: {document.source}
 A chatbot will use these chunks to answer questions about the company.
 You should divide up the document as you see fit, being sure that the entire document is returned across the chunks - don't leave anything out.
 This document should probably be split into at least {how_many} chunks, but you can have more or less as appropriate, ensuring that there are individual chunks to answer specific questions.
@@ -94,7 +114,7 @@ Together your chunks should represent the entire document with overlap.
 
 Here is the document:
 
-{document["text"]}
+{document.text}
 
 Respond with the chunks.
 """
@@ -182,8 +202,11 @@ async def create_embeddings(chunks):
 
 
 async def main():
-    documents = fetch_documents()
+    documents = list(fetch_documents())
+    print(f"Loaded {len(documents)} documents")
     chunks = await create_chunks(documents)
+    print(chunks)
+    return
     await create_embeddings(chunks)
     print("Ingestion complete")
 
