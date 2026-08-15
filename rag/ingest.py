@@ -6,7 +6,7 @@ Requires Python 3.12+ for itertools.batched.
 
 import asyncio
 import os
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
@@ -76,7 +76,7 @@ class Chunk(BaseModel):
         "exactly as is, not changed in any way"
     )
 
-    def as_result(self, document):
+    def as_result(self, document: Document) -> Result:
         metadata = {"source": document.source, "type": document.type}
         return Result(
             page_content=f"{self.headline}\n\n{self.summary}\n\n{self.original_text}",
@@ -100,7 +100,7 @@ def fetch_documents(root: Path = KNOWLEDGE_BASE_PATH) -> Iterator[Document]:
             )
 
 
-def make_prompt(document):
+def make_prompt(document: Document) -> str:
     how_many = (len(document.text) // AVERAGE_CHUNK_SIZE) + 1
     return f"""You take a document and you split the document into overlapping chunks for a KnowledgeBase.
 The document is from the shared drive of Fretwork, an online guitar store.
@@ -121,7 +121,7 @@ Respond with the chunks.
 """
 
 
-def make_messages(document):
+def make_messages(document: Document) -> list[dict[str, str]]:
     return [{"role": "user", "content": make_prompt(document)}]
 
 
@@ -131,7 +131,9 @@ def make_messages(document):
 
 
 @retry(wait=wait)
-async def process_document(document, semaphore):
+async def process_document(
+    document: Document, semaphore: asyncio.Semaphore
+) -> list[Result]:
     async with semaphore:
         response = await acompletion(
             model=MODEL, messages=make_messages(document), response_format=Chunks
@@ -141,7 +143,7 @@ async def process_document(document, semaphore):
     return [chunk.as_result(document) for chunk in doc_as_chunks]
 
 
-async def create_chunks(documents):
+async def create_chunks(documents: Iterable[Document]) -> list[Result]:
     """Chunk every document, at most CHUNK_CONCURRENCY requests in flight."""
     semaphore = asyncio.Semaphore(CHUNK_CONCURRENCY)
     results = await tqdm_asyncio.gather(
@@ -157,12 +159,12 @@ async def create_chunks(documents):
 
 
 @retry(wait=wait)
-async def embed_batch(texts):
+async def embed_batch(texts: list[str]) -> list[list[float]]:
     response = await async_openai.embeddings.create(model=embedding_model, input=texts)
     return [e.embedding for e in response.data]
 
 
-async def create_embeddings(chunks):
+async def create_embeddings(chunks: Iterable[Result]) -> None:
     chroma = PersistentClient(path=DB_NAME)
     if collection_name in [c.name for c in chroma.list_collections()]:
         chroma.delete_collection(collection_name)
@@ -172,7 +174,7 @@ async def create_embeddings(chunks):
     semaphore = asyncio.Semaphore(EMBED_CONCURRENCY)
     write_lock = asyncio.Lock()
 
-    async def handle(batch_index, batch):
+    async def handle(batch_index: int, batch: tuple[Result, ...]) -> None:
         texts = [chunk.page_content for chunk in batch]
         async with semaphore:
             vectors = await embed_batch(texts)
@@ -202,12 +204,10 @@ async def create_embeddings(chunks):
 # --------------------------------------------------------------------------
 
 
-async def main():
+async def main() -> None:
     documents = list(fetch_documents())
     print(f"Loaded {len(documents)} documents")
     chunks = await create_chunks(documents)
-    print(chunks)
-    return
     await create_embeddings(chunks)
     print("Ingestion complete")
 
