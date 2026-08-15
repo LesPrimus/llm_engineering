@@ -6,6 +6,7 @@ Requires Python 3.12+ for itertools.batched.
 
 import asyncio
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from itertools import batched
 from pathlib import Path
@@ -87,9 +88,9 @@ class Chunks(BaseModel):
     chunks: list[Chunk]
 
 
-def fetch_documents():
+def fetch_documents(root: Path = KNOWLEDGE_BASE_PATH) -> Iterator[Document]:
     """A homemade version of the LangChain DirectoryLoader"""
-    for folder in KNOWLEDGE_BASE_PATH.iterdir():
+    for folder in root.iterdir():
         doc_type = folder.name
         for file in folder.rglob("*.md"):
             yield Document(
