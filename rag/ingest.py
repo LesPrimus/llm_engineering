@@ -103,7 +103,7 @@ def fetch_documents(root: Path = KNOWLEDGE_BASE_PATH) -> Iterator[Document]:
 def make_prompt(document):
     how_many = (len(document.text) // AVERAGE_CHUNK_SIZE) + 1
     return f"""You take a document and you split the document into overlapping chunks for a KnowledgeBase.
-The document is from the shared drive of a company called Insurellm.
+The document is from the shared drive of Fretwork, an online guitar store.
 The document is of type: {document.type}
 The document has been retrieved from: {document.source}
 A chatbot will use these chunks to answer questions about the company.
