@@ -9,6 +9,7 @@ import os
 from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from itertools import chain
 from math import ceil
 
 from datasets import Dataset, load_dataset
@@ -112,4 +113,4 @@ class ChunkedItemLoader:
                 total=self.chunk_count,
                 desc=self.category,
             )
-            return [item for batch in batches for item in batch]
+            return list(chain.from_iterable(batches))
