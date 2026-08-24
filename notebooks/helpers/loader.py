@@ -41,6 +41,7 @@ from itertools import batched
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
+from notebooks.helpers.batch_client import BatchClient
 from notebooks.models.items import Item
 
 SYSTEM_PROMPT = """Create a concise description of a product. Respond only in this format. Do not include part numbers.
@@ -63,6 +64,9 @@ class RequestConfig:
 class Batch:
     items: list[Item]
     start: int
+    file_id: str | None = None
+    batch_id: str | None = None
+    output_file_id: str | None = None
 
     @property
     def end(self) -> int:
@@ -97,13 +101,34 @@ class Batch:
                 },
             }
 
+    def path(self, folder: Path) -> Path:
+        return folder / f"{self.name}.jsonl"
+
     def write(self, folder: Path, config: RequestConfig) -> Path:
         lines = [f"{json.dumps(request)}\n" for request in self.to_requests(config)]
         folder.mkdir(parents=True, exist_ok=True)
-        path = folder / f"{self.name}.jsonl"
+        path = self.path(folder)
         with path.open("w", encoding="utf-8") as file:
             file.writelines(lines)
         return path
+
+
+@dataclass
+class SubmitReport:
+    """Outcome of a `submit_all` run: nothing raises, everything is reported."""
+
+    submitted: list[Batch] = field(default_factory=list)
+    skipped: list[Batch] = field(default_factory=list)
+    failed: list[tuple[Batch, str]] = field(default_factory=list)
+
+    def __str__(self) -> str:
+        summary = (
+            f"{len(self.submitted)} submitted, "
+            f"{len(self.skipped)} already submitted, "
+            f"{len(self.failed)} failed"
+        )
+        details = "".join(f"\n  {batch.name}: {error}" for batch, error in self.failed)
+        return summary + details
 
 
 @dataclass
@@ -114,6 +139,7 @@ class BatchLoader:
     batches: list[Batch]
     folder: Path = FOLDER
     config: RequestConfig = field(default_factory=RequestConfig)
+    client: BatchClient | None = None
     written: list[Path] = field(default_factory=list, init=False)
 
     @classmethod
@@ -122,23 +148,33 @@ class BatchLoader:
         items: list[Item],
         folder: Path = FOLDER,
         config: RequestConfig | None = None,
+        client: BatchClient | None = None,
     ) -> Self:
         batches = [
             Batch(items=list(chunk), start=index * cls.BATCH_SIZE)
             for index, chunk in enumerate(batched(items, cls.BATCH_SIZE))
         ]
-        return cls(batches=batches, folder=folder, config=config or RequestConfig())
+        return cls(
+            batches=batches,
+            folder=folder,
+            config=config or RequestConfig(),
+            client=client,
+        )
 
     def __enter__(self) -> Self:
         self.folder.mkdir(parents=True, exist_ok=True)
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
-        if exc_type is not None:
+        if exc_type is not None and not self.submitted:
             for path in self.written:
                 path.unlink(missing_ok=True)
             self.written = []
         return False
+
+    @property
+    def submitted(self) -> list[Batch]:
+        return [batch for batch in self.batches if batch.batch_id is not None]
 
     def __len__(self) -> int:
         return len(self.batches)
@@ -148,3 +184,26 @@ class BatchLoader:
         for batch in self.batches:
             self.written.append(batch.write(self.folder, self.config))
         return self.written
+
+    def submit_all(self) -> SubmitReport:
+        """Upload and submit every batch, carrying on past individual failures.
+
+        Batches that already hold a `batch_id` are skipped, so a re-run retries
+        only what failed rather than duplicating live jobs.
+        """
+        if self.client is None:
+            raise ValueError("no BatchClient: pass client=... to BatchLoader.create")
+
+        report = SubmitReport()
+        for batch in self.batches:
+            if batch.batch_id is not None:
+                report.skipped.append(batch)
+                continue
+            try:
+                batch.file_id = self.client.upload(batch.path(self.folder))
+                batch.batch_id = self.client.submit(batch.file_id, self.config.endpoint)
+            except Exception as error:
+                report.failed.append((batch, f"{type(error).__name__}: {error}"))
+            else:
+                report.submitted.append(batch)
+        return report
