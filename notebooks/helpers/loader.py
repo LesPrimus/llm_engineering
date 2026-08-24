@@ -1,36 +1,28 @@
-"""Chunk items into batches and write them as JSONL request files.
+"""Summarize items through a batch API, one JSONL request file per chunk.
 
-Currently covers the local half of the pipeline: `BatchLoader.create` splits
-items into `Batch` windows, and `make_files` writes one `.jsonl` request file
-per batch, named `{start}_{end}.jsonl`.
+`BatchLoader.create` splits items into `Batch` windows; `make_files` writes one
+request file per batch; `submit_all` uploads and submits them, recording the job
+ids in `jobs.json`; `fetch` polls, downloads results, and fills in
+`Item.summary`. Entering the loader restores whatever run its folder already
+holds, so re-running a cell resumes rather than duplicating live jobs.
 
-Remaining work, in order:
+Remaining work:
 
-1. Client. Point the OpenAI SDK at Groq -- `base_url="https://api.groq.com/openai/v1"`
-   with `GROQ_API_KEY` passed explicitly, or the SDK silently falls back to
-   `OPENAI_API_KEY`. Smoke-test a two-line file first: Groq documents the batch
-   routes under that base path but does not officially bless the OpenAI SDK.
-2. Upload. `client.files.create(file=..., purpose="batch")` per written file,
-   keeping the returned `file_id` on the Batch.
-3. Submit. `client.batches.create(completion_window=..., endpoint=config.endpoint,
-   input_file_id=...)` -> `batch_id`. Groq allows 24h to 7d; longer windows
-   complete more reliably under load.
-4. Poll. Done -- `poll` refreshes every live job and records `output_file_id`
-   once a batch completes.
-5. Download. Done -- `fetch` saves each result file under `output/`, skipping
-   files already on disk.
-6. Apply. Done -- `Batch.apply` matches each line on `custom_id` and sets
-   `summary`, counting lines that carry no usable response.
-7. Persist. Done -- `save_jobs` writes the ids to `jobs.json` after every
-   successful submission, and `restore` re-attaches them to freshly created
-   batches by name.
+1. Publish. Push the summarized items back to the Hub so the summaries outlive
+   the kernel that fetched them -- today they exist only in memory and in the
+   downloaded result files under `output/`. The counterpart to `Item.from_hub`
+   belongs beside it in `notebooks/models/items.py`, not here: this module is
+   about batching, not about where items are stored. Decide what ships (all
+   three splits, or train only) and whether the dataset is versioned per run.
 
-Open questions:
+Notes:
 
 - Groq accepts up to 50,000 lines and 200MB per file, so `batch_size` trades
   fewer job ids to track against coarser retries when one job fails.
 - Items must arrive with `id` and `full` populated; `ed-donner/items_raw_lite`
   leaves `id` null, so the caller assigns ids before batching.
+- Results come back unordered and may contain error lines, so `Batch.apply`
+  matches on `custom_id` and counts what it could not use.
 """
 
 import json
