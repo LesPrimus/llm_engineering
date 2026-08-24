@@ -1893,6 +1893,7 @@ dependencies = [
     { name = "sentence-transformers" },
     { name = "tenacity" },
     { name = "torch" },
+    { name = "tqdm" },
     { name = "transformers" },
 ]
 
@@ -1926,6 +1927,7 @@ requires-dist = [
     { name = "sentence-transformers", specifier = ">=5.6.1" },
     { name = "tenacity", specifier = ">=9.1.4" },
     { name = "torch", specifier = ">=2.13.0" },
+    { name = "tqdm", specifier = ">=4.68.4" },
     { name = "transformers", specifier = ">=5.14.1" },
 ]
 

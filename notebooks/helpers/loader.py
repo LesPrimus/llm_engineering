@@ -22,9 +22,9 @@ Remaining work, in order:
 6. Apply. Map each result line's `custom_id` back to its Item and set `summary`.
    Results arrive unordered, so look up by id rather than by position, and
    account for lines that carry an error instead of a response.
-7. Persist. A run holds one `batch_id` per batch against a 24h+ window, so a
-   kernel restart must not lose them. Decide what to save (job ids only, with
-   items re-attached on load) and in what format.
+7. Persist. Done -- `save_jobs` writes the ids to `jobs.json` after every
+   successful submission, and `restore` re-attaches them to freshly created
+   batches by name.
 
 Open questions:
 
@@ -41,8 +41,12 @@ from itertools import batched
 from pathlib import Path
 from typing import Any, ClassVar, Self
 
+from tqdm.auto import tqdm
+
 from notebooks.helpers.batch_client import BatchClient
 from notebooks.models.items import Item
+
+JOBS_FILE = "jobs.json"
 
 SYSTEM_PROMPT = """Create a concise description of a product. Respond only in this format. Do not include part numbers.
 Title: Rewritten short precise title
@@ -182,7 +186,7 @@ class BatchLoader:
 
     def make_files(self) -> list[Path]:
         self.written = []
-        for batch in self.batches:
+        for batch in tqdm(self.batches, desc="Writing batches", unit="file"):
             self.written.append(batch.write(self.folder, self.config))
         return self.written
 
@@ -196,7 +200,7 @@ class BatchLoader:
             raise ValueError("no BatchClient: pass client=... to BatchLoader.create")
 
         report = SubmitReport()
-        for batch in self.batches:
+        for batch in tqdm(self.batches, desc="Submitting batches", unit="job"):
             if batch.batch_id is not None:
                 report.skipped.append(batch)
                 continue
@@ -207,4 +211,45 @@ class BatchLoader:
                 report.failed.append((batch, f"{type(error).__name__}: {error}"))
             else:
                 report.submitted.append(batch)
+                self.save_jobs()
         return report
+
+    def jobs_path(self, path: Path | None = None) -> Path:
+        return path or self.folder / JOBS_FILE
+
+    def save_jobs(self, path: Path | None = None) -> Path:
+        """Write the job ids to disk so a restart cannot strand live batches."""
+        path = self.jobs_path(path)
+        jobs = {
+            batch.name: {
+                "file_id": batch.file_id,
+                "batch_id": batch.batch_id,
+                "output_file_id": batch.output_file_id,
+            }
+            for batch in self.batches
+            if batch.file_id is not None or batch.batch_id is not None
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(jobs, indent=2), encoding="utf-8")
+        return path
+
+    def restore(self, path: Path | None = None) -> int:
+        """Re-attach saved job ids to freshly created batches, by batch name."""
+        path = self.jobs_path(path)
+        jobs = json.loads(path.read_text(encoding="utf-8"))
+        by_name = {batch.name: batch for batch in self.batches}
+
+        unknown = sorted(set(jobs) - set(by_name))
+        if unknown:
+            raise ValueError(
+                f"{path} holds batches this loader does not have: "
+                f"{', '.join(unknown)}. The chunk boundaries differ -- check that "
+                f"batch_size and the item list match the run that saved it."
+            )
+
+        for name, job in jobs.items():
+            batch = by_name[name]
+            batch.file_id = job["file_id"]
+            batch.batch_id = job["batch_id"]
+            batch.output_file_id = job["output_file_id"]
+        return len(jobs)
