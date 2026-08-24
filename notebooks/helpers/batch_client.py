@@ -8,7 +8,7 @@ be passed explicitly: left to itself the SDK falls back to `OPENAI_API_KEY`.
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Self
+from typing import Any, Self
 
 from openai import OpenAI
 
@@ -43,3 +43,13 @@ class BatchClient:
             input_file_id=file_id,
         )
         return job.id
+
+    def status(self, batch_id: str) -> Any:
+        """Retrieve a batch job: `.status`, `.output_file_id`, `.error_file_id`."""
+        return self.client.batches.retrieve(batch_id)
+
+    def download(self, output_file_id: str, path: Path) -> Path:
+        """Save a result file to disk and return its path."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.client.files.content(output_file_id).write_to_file(str(path))
+        return path

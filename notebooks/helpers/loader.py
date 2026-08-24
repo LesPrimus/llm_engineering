@@ -15,13 +15,12 @@ Remaining work, in order:
 3. Submit. `client.batches.create(completion_window=..., endpoint=config.endpoint,
    input_file_id=...)` -> `batch_id`. Groq allows 24h to 7d; longer windows
    complete more reliably under load.
-4. Poll. `client.batches.retrieve(batch_id)` until status is "completed", then
-   capture `output_file_id`. Jobs can also fail or expire -- handle both.
-5. Download. `client.files.content(output_file_id).write_to_file(...)` into an
-   `output/` folder, and add `notebooks/**/output/` to .gitignore.
-6. Apply. Map each result line's `custom_id` back to its Item and set `summary`.
-   Results arrive unordered, so look up by id rather than by position, and
-   account for lines that carry an error instead of a response.
+4. Poll. Done -- `poll` refreshes every live job and records `output_file_id`
+   once a batch completes.
+5. Download. Done -- `fetch` saves each result file under `output/`, skipping
+   files already on disk.
+6. Apply. Done -- `Batch.apply` matches each line on `custom_id` and sets
+   `summary`, counting lines that carry no usable response.
 7. Persist. Done -- `save_jobs` writes the ids to `jobs.json` after every
    successful submission, and `restore` re-attaches them to freshly created
    batches by name.
@@ -47,6 +46,9 @@ from notebooks.helpers.batch_client import BatchClient
 from notebooks.models.items import Item
 
 JOBS_FILE = "jobs.json"
+OUTPUT_FOLDER = "output"
+COMPLETED = "completed"
+TERMINAL_FAILURES = frozenset({"failed", "expired", "cancelled"})
 
 SYSTEM_PROMPT = """Create a concise description of a product. Respond only in this format. Do not include part numbers.
 Title: Rewritten short precise title
@@ -71,6 +73,7 @@ class Batch:
     file_id: str | None = None
     batch_id: str | None = None
     output_file_id: str | None = None
+    error_file_id: str | None = None
 
     @property
     def end(self) -> int:
@@ -82,6 +85,12 @@ class Batch:
 
     def __len__(self) -> int:
         return len(self.items)
+
+    def __repr__(self) -> str:
+        job = self.batch_id or "not submitted"
+        return f"<Batch {self.name} | {len(self.items)} items | {job}>"
+
+    __str__ = __repr__
 
     def to_requests(self, config: RequestConfig) -> Iterator[dict[str, Any]]:
         for offset, item in enumerate(self.items):
@@ -108,6 +117,26 @@ class Batch:
     def path(self, folder: Path) -> Path:
         return folder / f"{self.name}.jsonl"
 
+    def apply(self, path: Path) -> tuple[int, int]:
+        """Fill in item summaries from a result file.
+
+        Results arrive in arbitrary order, so every line is matched on its
+        `custom_id`. Returns (summaries applied, lines that carried no usable
+        response -- an error line, or an id this batch does not own).
+        """
+        by_id = {item.id: item for item in self.items}
+        applied = unusable = 0
+        for line in path.read_text(encoding="utf-8").splitlines():
+            result = json.loads(line)
+            item = by_id.get(result.get("custom_id"))
+            choices = ((result.get("response") or {}).get("body") or {}).get("choices")
+            if item is None or not choices:
+                unusable += 1
+                continue
+            item.summary = choices[0]["message"]["content"].strip()
+            applied += 1
+        return applied, unusable
+
     def write(self, folder: Path, config: RequestConfig) -> Path:
         lines = [f"{json.dumps(request)}\n" for request in self.to_requests(config)]
         folder.mkdir(parents=True, exist_ok=True)
@@ -133,6 +162,34 @@ class SubmitReport:
         )
         details = "".join(f"\n  {batch.name}: {error}" for batch, error in self.failed)
         return summary + details
+
+    __repr__ = __str__
+
+
+@dataclass
+class FetchReport:
+    """Outcome of a `fetch` run. Terminal failures are reported, not raised."""
+
+    applied: list[Batch] = field(default_factory=list)
+    pending: list[tuple[Batch, str]] = field(default_factory=list)
+    failed: list[tuple[Batch, str]] = field(default_factory=list)
+    summaries: int = 0
+    unusable: int = 0
+
+    def __str__(self) -> str:
+        summary = (
+            f"{len(self.applied)} applied ({self.summaries} summaries), "
+            f"{len(self.pending)} pending, {len(self.failed)} failed"
+        )
+        if self.unusable:
+            summary += f", {self.unusable} results unusable"
+        details = "".join(
+            f"\n  {batch.name}: {status}"
+            for batch, status in self.pending + self.failed
+        )
+        return summary + details
+
+    __repr__ = __str__
 
 
 @dataclass
@@ -222,6 +279,60 @@ class BatchLoader:
                 self.save_jobs()
         return report
 
+    @property
+    def output_folder(self) -> Path:
+        return self.folder.parent / OUTPUT_FOLDER
+
+    def poll(self) -> dict[str, str]:
+        """Refresh the status of every live job, recording result file ids."""
+        if self.client is None:
+            raise ValueError("no BatchClient: pass client=... to BatchLoader.create")
+
+        statuses = {
+            batch.name: COMPLETED
+            for batch in self.batches
+            if batch.output_file_id is not None
+        }
+        live = [
+            batch
+            for batch in self.batches
+            if batch.batch_id is not None and batch.output_file_id is None
+        ]
+        for batch in tqdm(live, desc="Polling batches", unit="job"):
+            job = self.client.status(batch.batch_id)
+            statuses[batch.name] = job.status
+            batch.error_file_id = getattr(job, "error_file_id", None)
+            if job.status == COMPLETED:
+                batch.output_file_id = job.output_file_id
+        if live:
+            self.save_jobs()
+        return statuses
+
+    def fetch(self) -> FetchReport:
+        """Poll, download whatever finished, and apply summaries to the items."""
+        statuses = self.poll()
+        report = FetchReport()
+        ready = []
+        for batch in self.batches:
+            if batch.output_file_id is not None:
+                ready.append(batch)
+            elif batch.batch_id is None:
+                report.pending.append((batch, "not submitted"))
+            elif statuses.get(batch.name, "unknown") in TERMINAL_FAILURES:
+                report.failed.append((batch, statuses[batch.name]))
+            else:
+                report.pending.append((batch, statuses.get(batch.name, "unknown")))
+
+        for batch in tqdm(ready, desc="Fetching results", unit="file"):
+            path = batch.path(self.output_folder)
+            if not path.exists():
+                self.client.download(batch.output_file_id, path)
+            applied, unusable = batch.apply(path)
+            report.applied.append(batch)
+            report.summaries += applied
+            report.unusable += unusable
+        return report
+
     def jobs_path(self, path: Path | None = None) -> Path:
         return path or self.folder / JOBS_FILE
 
@@ -233,6 +344,7 @@ class BatchLoader:
                 "file_id": batch.file_id,
                 "batch_id": batch.batch_id,
                 "output_file_id": batch.output_file_id,
+                "error_file_id": batch.error_file_id,
             }
             for batch in self.batches
             if batch.file_id is not None or batch.batch_id is not None
@@ -260,4 +372,5 @@ class BatchLoader:
             batch.file_id = job["file_id"]
             batch.batch_id = job["batch_id"]
             batch.output_file_id = job["output_file_id"]
+            batch.error_file_id = job.get("error_file_id")
         return len(jobs)
