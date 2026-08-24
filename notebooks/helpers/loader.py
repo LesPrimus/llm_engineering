@@ -167,7 +167,15 @@ class BatchLoader:
         )
 
     def __enter__(self) -> Self:
+        """Prepare the folder and pick up any run already recorded there.
+
+        Restoring on entry makes re-running a submission cell a no-op instead of
+        a second set of live jobs: batches that already hold an id are skipped.
+        To start over deliberately, delete the jobs file or use a new folder.
+        """
         self.folder.mkdir(parents=True, exist_ok=True)
+        if self.jobs_path().exists():
+            self.restore()
         return self
 
     def __exit__(self, exc_type, exc, traceback) -> bool:
