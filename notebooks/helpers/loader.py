@@ -1,3 +1,39 @@
+"""Chunk items into batches and write them as JSONL request files.
+
+Currently covers the local half of the pipeline: `BatchLoader.create` splits
+items into `Batch` windows, and `make_files` writes one `.jsonl` request file
+per batch, named `{start}_{end}.jsonl`.
+
+Remaining work, in order:
+
+1. Client. Point the OpenAI SDK at Groq -- `base_url="https://api.groq.com/openai/v1"`
+   with `GROQ_API_KEY` passed explicitly, or the SDK silently falls back to
+   `OPENAI_API_KEY`. Smoke-test a two-line file first: Groq documents the batch
+   routes under that base path but does not officially bless the OpenAI SDK.
+2. Upload. `client.files.create(file=..., purpose="batch")` per written file,
+   keeping the returned `file_id` on the Batch.
+3. Submit. `client.batches.create(completion_window=..., endpoint=config.endpoint,
+   input_file_id=...)` -> `batch_id`. Groq allows 24h to 7d; longer windows
+   complete more reliably under load.
+4. Poll. `client.batches.retrieve(batch_id)` until status is "completed", then
+   capture `output_file_id`. Jobs can also fail or expire -- handle both.
+5. Download. `client.files.content(output_file_id).write_to_file(...)` into an
+   `output/` folder, and add `notebooks/**/output/` to .gitignore.
+6. Apply. Map each result line's `custom_id` back to its Item and set `summary`.
+   Results arrive unordered, so look up by id rather than by position, and
+   account for lines that carry an error instead of a response.
+7. Persist. A run holds one `batch_id` per batch against a 24h+ window, so a
+   kernel restart must not lose them. Decide what to save (job ids only, with
+   items re-attached on load) and in what format.
+
+Open questions:
+
+- `BATCH_SIZE` is a ClassVar, so it cannot be varied per run without mutating
+  the class. Make it a `create()` parameter if a run needs a different size.
+- Items must arrive with `id` and `full` populated; `ed-donner/items_raw_lite`
+  leaves `id` null, so the caller assigns ids before batching.
+"""
+
 import json
 from collections.abc import Iterator
 from dataclasses import dataclass, field
