@@ -5,7 +5,7 @@ requires-python = ">=3.14"
 dependencies = [
     "anthropic>=0.116.0",
     "beautifulsoup4>=4.15.0",
-    "datasets==3.6.0",
+    "datasets>=4.4.0",
     "gradio>=6.20.0",
     "langchain-chroma>=1.1.0",
     "langchain-community>=0.4.2",

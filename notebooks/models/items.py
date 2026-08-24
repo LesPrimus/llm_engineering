@@ -1,43 +1,35 @@
-from collections.abc import Mapping
-from decimal import Decimal
-from typing import Any, Self
+from typing import Self
 
+from datasets import load_dataset
 from pydantic import BaseModel
-
-from notebooks.dataset_helpers import to_details, to_price, to_weight
-
-# Stand-in for the rows that name no category at all, so an otherwise usable
-# item is never dropped over a missing label.
-UNCATEGORIZED = "Uncategorized"
 
 
 class Item(BaseModel):
+    """
+    An Item is a data-point of a Product with a Price
+    """
+
     title: str
     category: str
-    price: Decimal
+    price: float
+    full: str | None = None
     weight: float | None = None
+    summary: str | None = None
+    prompt: str | None = None
+    id: str | None = None
+
+    def __repr__(self) -> str:
+        title = self.title if len(self.title) <= 50 else f"{self.title[:49]}…"
+        return f"<{title} | {self.category} | ${self.price:.2f}>"
+
+    __str__ = __repr__
 
     @classmethod
-    def from_datapoint(cls, datapoint: Mapping[str, Any]) -> Self | None:
-        """Build an ``Item`` from one raw dataset row, or ``None`` if it has no price.
-
-        Most rows in the dataset carry no usable price, so a missing one is a
-        skip rather than an error — filter the ``None``s out at the call site.
-        The price string is handed to pydantic untouched, keeping the exact
-        base-10 value instead of routing it through a float.
-        """
-        price = datapoint.get("price")
-        if to_price(price) is None:
-            return None
-
-        # ~5% of rows have no main_category; their categories breadcrumb starts
-        # with the same top-level label, so fall back to that.
-        categories = datapoint.get("categories") or []
-        category = datapoint["main_category"] or (categories[0] if categories else "")
-
-        return cls(
-            title=datapoint["title"],
-            category=category or UNCATEGORIZED,
-            price=price,
-            weight=to_weight(to_details(datapoint)),
+    def from_hub(cls, dataset_name: str) -> tuple[list[Self], list[Self], list[Self]]:
+        """Load from HuggingFace Hub and reconstruct Items"""
+        ds = load_dataset(dataset_name)
+        return (
+            [cls.model_validate(row) for row in ds["train"]],
+            [cls.model_validate(row) for row in ds["validation"]],
+            [cls.model_validate(row) for row in ds["test"]],
         )
