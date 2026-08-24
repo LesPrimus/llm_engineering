@@ -28,8 +28,8 @@ Remaining work, in order:
 
 Open questions:
 
-- `BATCH_SIZE` is a ClassVar, so it cannot be varied per run without mutating
-  the class. Make it a `create()` parameter if a run needs a different size.
+- Groq accepts up to 50,000 lines and 200MB per file, so `batch_size` trades
+  fewer job ids to track against coarser retries when one job fails.
 - Items must arrive with `id` and `full` populated; `ed-donner/items_raw_lite`
   leaves `id` null, so the caller assigns ids before batching.
 """
@@ -133,7 +133,7 @@ class SubmitReport:
 
 @dataclass
 class BatchLoader:
-    BATCH_SIZE: ClassVar[int] = 1_000
+    BATCH_SIZE: ClassVar[int] = 1_000  # default only; override per run via create()
     FOLDER: ClassVar[Path] = Path("batches")
 
     batches: list[Batch]
@@ -146,13 +146,14 @@ class BatchLoader:
     def create(
         cls,
         items: list[Item],
+        batch_size: int = BATCH_SIZE,
         folder: Path = FOLDER,
         config: RequestConfig | None = None,
         client: BatchClient | None = None,
     ) -> Self:
         batches = [
-            Batch(items=list(chunk), start=index * cls.BATCH_SIZE)
-            for index, chunk in enumerate(batched(items, cls.BATCH_SIZE))
+            Batch(items=list(chunk), start=index * batch_size)
+            for index, chunk in enumerate(batched(items, batch_size))
         ]
         return cls(
             batches=batches,
