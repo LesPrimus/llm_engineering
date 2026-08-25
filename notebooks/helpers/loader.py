@@ -6,14 +6,9 @@ ids in `jobs.json`; `fetch` polls, downloads results, and fills in
 `Item.summary`. Entering the loader restores whatever run its folder already
 holds, so re-running a cell resumes rather than duplicating live jobs.
 
-Remaining work:
-
-1. Publish. Push the summarized items back to the Hub so the summaries outlive
-   the kernel that fetched them -- today they exist only in memory and in the
-   downloaded result files under `output/`. The counterpart to `Item.from_hub`
-   belongs beside it in `notebooks/models/items.py`, not here: this module is
-   about batching, not about where items are stored. Decide what ships (all
-   three splits, or train only) and whether the dataset is versioned per run.
+Summaries live on the items themselves, so nothing here stores them.
+`Item.to_hub` publishes the finished splits; the result files under `output/`
+are a local safety net that `fetch` re-applies without calling the API.
 
 Notes:
 
