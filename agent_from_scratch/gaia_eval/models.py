@@ -7,11 +7,18 @@ string. ``GaiaTask`` renames, casts and blanks those out in one
 drifts again.
 """
 
-from typing import Annotated, Literal
+from enum import IntEnum
+from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
-Level = Literal[1, 2, 3]
+
+class Level(IntEnum):
+    """How hard a task is, from 1 (within reach of a very good LLM) to 3."""
+
+    ONE = 1
+    TWO = 2
+    THREE = 3
 
 
 def _blank_to_none(value: str | None) -> str | None:
@@ -52,7 +59,7 @@ class GaiaTask(BaseModel):
 
     task_id: str
     question: str = Field(alias="Question")
-    level: Annotated[Level, BeforeValidator(int)] = Field(alias="Level")
+    level: Level = Field(alias="Level")
     final_answer: Annotated[str | None, BeforeValidator(_hidden_to_none)] = Field(
         alias="Final answer"
     )
