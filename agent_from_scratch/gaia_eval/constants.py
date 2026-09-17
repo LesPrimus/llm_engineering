@@ -1,6 +1,8 @@
-"""The fixed choices GAIA offers: which split, and which difficulty level."""
+"""Where GAIA lives on the Hub, and the fixed choices it offers: split and level."""
 
 from enum import IntEnum, StrEnum
+
+REPO_ID = "gaia-benchmark/GAIA"
 
 
 class Split(StrEnum):

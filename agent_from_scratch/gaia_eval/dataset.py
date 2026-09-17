@@ -10,10 +10,8 @@ from typing import Self
 
 from datasets import load_dataset
 
-from .constants import Level, Split
+from .constants import REPO_ID, Level, Split
 from .models import GaiaTask
-
-REPO_ID = "gaia-benchmark/GAIA"
 
 
 @dataclass(frozen=True)
