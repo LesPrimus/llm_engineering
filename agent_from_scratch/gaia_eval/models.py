@@ -12,6 +12,8 @@ from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
+from .helpers import blank_to_none, count, hidden_to_none
+
 
 class Level(IntEnum):
     """How hard a task is, from 1 (within reach of a very good LLM) to 3."""
@@ -21,33 +23,18 @@ class Level(IntEnum):
     THREE = 3
 
 
-def _blank_to_none(value: str | None) -> str | None:
-    return value or None
-
-
-def _hidden_to_none(value: str | None) -> str | None:
-    """The test split's answers are private; every one of them reads ``?``."""
-    return None if value == "?" else _blank_to_none(value)
-
-
-def _count(value: str | int) -> int | None:
-    """Annotators mostly wrote a number, but one left it blank and one wrote prose."""
-    text = str(value)
-    return int(text) if text.isdigit() else None
-
-
 class AnnotatorMetadata(BaseModel):
     """How the human annotator solved the task. Only the validation split has it."""
 
     model_config = ConfigDict(frozen=True)
 
     steps: str = Field(alias="Steps")
-    number_of_steps: Annotated[int | None, BeforeValidator(_count)] = Field(
+    number_of_steps: Annotated[int | None, BeforeValidator(count)] = Field(
         alias="Number of steps"
     )
     time_taken: str = Field(alias="How long did this take?")
     tools: str = Field(alias="Tools")
-    number_of_tools: Annotated[int | None, BeforeValidator(_count)] = Field(
+    number_of_tools: Annotated[int | None, BeforeValidator(count)] = Field(
         alias="Number of tools"
     )
 
@@ -60,12 +47,12 @@ class GaiaTask(BaseModel):
     task_id: str
     question: str = Field(alias="Question")
     level: Level = Field(alias="Level")
-    final_answer: Annotated[str | None, BeforeValidator(_hidden_to_none)] = Field(
+    final_answer: Annotated[str | None, BeforeValidator(hidden_to_none)] = Field(
         alias="Final answer"
     )
-    file_name: Annotated[str | None, BeforeValidator(_blank_to_none)]
+    file_name: Annotated[str | None, BeforeValidator(blank_to_none)]
     # Relative to the dataset repo, e.g. ``2023/validation/<task_id>.xlsx``.
-    file_path: Annotated[str | None, BeforeValidator(_blank_to_none)]
+    file_path: Annotated[str | None, BeforeValidator(blank_to_none)]
     annotator_metadata: AnnotatorMetadata | None = Field(alias="Annotator Metadata")
 
     @field_validator("annotator_metadata", mode="before")
