@@ -1,4 +1,5 @@
-"""Evaluating the agent on the GAIA benchmark — questions, answers, scoring.
+"""Evaluating the agent on the GAIA benchmark — questions, answers, scoring."""
 
-Empty for now. Modules land here as they are written.
-"""
+from .dataset import AnnotatorMetadata, GaiaTask, load_gaia
+
+__all__ = ["AnnotatorMetadata", "GaiaTask", "load_gaia"]
