@@ -10,7 +10,7 @@ string. The models below rename, cast and blank those out in one
 drifts again.
 """
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
 from datasets import load_dataset
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
@@ -78,11 +78,11 @@ class GaiaTask(BaseModel):
             return None
         return value
 
-
-def load_gaia(
-    split: Split = "validation", level: Level | None = None
-) -> list[GaiaTask]:
-    """Load one split of GAIA 2023, optionally narrowed to a single level."""
-    config = "2023_all" if level is None else f"2023_level{level}"
-    rows = load_dataset(REPO_ID, config, split=split)
-    return [GaiaTask.model_validate(row) for row in rows]
+    @classmethod
+    def from_hub(
+        cls, split: Split = "validation", level: Level | None = None
+    ) -> list[Self]:
+        """Load one split of GAIA 2023, optionally narrowed to a single level."""
+        config = "2023_all" if level is None else f"2023_level{level}"
+        rows = load_dataset(REPO_ID, config, split=split)
+        return [cls.model_validate(row) for row in rows]
