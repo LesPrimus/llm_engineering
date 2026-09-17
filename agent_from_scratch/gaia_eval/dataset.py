@@ -6,7 +6,8 @@ token from ``HF_TOKEN`` or ``huggingface-cli login``.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Literal, Self
+from enum import StrEnum
+from typing import Self
 
 from datasets import load_dataset
 
@@ -14,7 +15,12 @@ from .models import GaiaTask, Level
 
 REPO_ID = "gaia-benchmark/GAIA"
 
-Split = Literal["validation", "test"]
+
+class Split(StrEnum):
+    """The dataset's splits. Only validation publishes its answers."""
+
+    VALIDATION = "validation"
+    TEST = "test"
 
 
 @dataclass(frozen=True)
@@ -26,7 +32,9 @@ class GaiaDataset:
     tasks: tuple[GaiaTask, ...]
 
     @classmethod
-    def from_hub(cls, split: Split = "validation", level: Level | None = None) -> Self:
+    def from_hub(
+        cls, split: Split = Split.VALIDATION, level: Level | None = None
+    ) -> Self:
         config = "2023_all" if level is None else f"2023_level{level}"
         rows = load_dataset(REPO_ID, config, split=split)
         return cls(split, level, tuple(GaiaTask.model_validate(row) for row in rows))
