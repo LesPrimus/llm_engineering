@@ -6,21 +6,14 @@ token from ``HF_TOKEN`` or ``huggingface-cli login``.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from enum import StrEnum
 from typing import Self
 
 from datasets import load_dataset
 
-from .models import GaiaTask, Level
+from .constants import Level, Split
+from .models import GaiaTask
 
 REPO_ID = "gaia-benchmark/GAIA"
-
-
-class Split(StrEnum):
-    """The dataset's splits. Only validation publishes its answers."""
-
-    VALIDATION = "validation"
-    TEST = "test"
 
 
 @dataclass(frozen=True)

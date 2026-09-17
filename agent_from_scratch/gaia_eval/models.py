@@ -7,20 +7,12 @@ string. ``GaiaTask`` renames, casts and blanks those out in one
 drifts again.
 """
 
-from enum import IntEnum
 from typing import Annotated
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
+from .constants import Level
 from .helpers import blank_to_none, count, hidden_to_none
-
-
-class Level(IntEnum):
-    """How hard a task is, from 1 (within reach of a very good LLM) to 3."""
-
-    ONE = 1
-    TWO = 2
-    THREE = 3
 
 
 class AnnotatorMetadata(BaseModel):
