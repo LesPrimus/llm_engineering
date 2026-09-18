@@ -34,4 +34,5 @@ dev = [
     "nbstripout>=0.9.1",
     "pre-commit>=4.6.0",
     "ruff>=0.15.20",
+    "types-tqdm>=4.70.0.20260906",
 ]
