@@ -1,69 +1,13 @@
-"""Tools the agent can call: plain functions, and the schema a model knows them by.
-
-A tool has two readers. The model sees a JSON schema — a name, a description,
-the arguments and their types — and answers with a call to it, the arguments
-as a JSON string. The agent loop sees a Python function to run on them. Writing
-the schema by hand leaves two copies of one signature to keep in step, so
-:class:`Tool` derives it instead: the name from the function, the description
-from its docstring, the arguments from its type hints. What the model should
-know about a single argument goes in ``Annotated[..., Field(description=...)]``.
-
-A tool's docstring is sent to the model verbatim, so it is written for the model
-to read; notes for us go in comments.
-"""
+"""Arithmetic the model can hand off rather than work out in its head."""
 
 import ast
-import inspect
 import operator
 from collections.abc import Callable
-from dataclasses import dataclass
-from functools import cached_property
 from typing import Annotated, Any
 
-from pydantic import Field, TypeAdapter
+from pydantic import Field
 
-
-@dataclass(frozen=True)
-class Tool:
-    """A function the model can call, and the schema it is offered under."""
-
-    function: Callable[..., str]
-
-    def __post_init__(self) -> None:
-        if not inspect.getdoc(self.function):
-            raise ValueError(f"{self.name} needs a docstring: it is the description")
-
-    @property
-    def name(self) -> str:
-        """What the model calls the tool by, and what its calls come back naming."""
-        return self.function.__name__
-
-    @property
-    def schema(self) -> dict[str, Any]:
-        """The tool's entry in a chat completion's ``tools`` list."""
-        return {
-            "type": "function",
-            "function": {
-                "name": self.name,
-                "description": inspect.getdoc(self.function),
-                "parameters": self._adapter.json_schema(),
-            },
-        }
-
-    def call(self, arguments: str) -> str:
-        """Run the function on the model's JSON arguments, checked against its signature.
-
-        Raises ``pydantic.ValidationError`` when the arguments do not fit the
-        signature, and whatever the function raises when they do and it fails
-        anyway. Telling the model what went wrong is the agent loop's job.
-        """
-        return self._adapter.validate_json(arguments)
-
-    @cached_property
-    def _adapter(self) -> TypeAdapter[str]:
-        """Validates arguments against the signature, and calls the function with them."""
-        return TypeAdapter(self.function)
-
+from .base import Tool
 
 # ``9 ** 9 ** 9`` is eleven characters and a computation that never finishes.
 # Integer powers are refused past this many bits, about 3,000 digits; a float
