@@ -53,4 +53,10 @@ class Tool:
     @cached_property
     def _adapter(self) -> TypeAdapter[str]:
         """Validates arguments against the signature, and calls the function with them."""
-        return TypeAdapter(self.function)
+        # A tool that carries state is written as a callable object rather than
+        # a function, and pydantic reads a signature off a function: for one of
+        # those the arguments are on ``__call__``, with ``self`` already bound.
+        function: Any = self.function
+        if not inspect.isroutine(function):
+            function = function.__call__
+        return TypeAdapter(function)
