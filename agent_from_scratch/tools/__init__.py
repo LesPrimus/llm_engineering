@@ -2,7 +2,7 @@
 
 A tool has two readers. The model sees a JSON schema — a name, a description,
 the arguments and their types — and answers with a call to it. The server sees
-a Python function to run on the arguments. ``@server.tool`` derives the one from
+a Python function to run on the arguments. ``@tool`` derives the one from
 the other, so a tool is written as a function and nothing else. What the model
 should know about a single argument goes in ``Annotated[..., Field(description=...)]``.
 

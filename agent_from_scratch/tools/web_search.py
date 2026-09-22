@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from pydantic import Field
 from tavily import TavilyClient  # type: ignore[import-untyped]
 
-from .server import server
+from .server import tool
 
 # Enough results to cross-check a claim against a second source, few enough
 # that a handful of searches still leaves room in the context for the reasoning.
@@ -20,7 +20,7 @@ MAX_RESULTS = 5
 SEARCH_DEPTH = "advanced"
 
 
-@server.tool(structured_output=False)
+@tool
 def web_search(
     query: Annotated[
         str,
