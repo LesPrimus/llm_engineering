@@ -5,9 +5,8 @@ import operator
 from collections.abc import Callable
 from typing import Annotated, Any
 
+from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
-
-from .base import Tool
 
 # ``9 ** 9 ** 9`` is eleven characters and a computation that never finishes.
 # Integer powers are refused past this many bits, about 3,000 digits; a float
@@ -45,7 +44,13 @@ def calculator(
     """
     # Walked by hand rather than handed to ``eval``: the expression is written
     # by a model, and a model can write ``__import__("os")`` as easily as ``1 + 1``.
-    return str(_evaluate(ast.parse(expression, mode="eval").body))
+    try:
+        return str(_evaluate(ast.parse(expression, mode="eval").body))
+    except (SyntaxError, ArithmeticError, ValueError) as error:
+        # Each of these is the expression's fault — a typo, a division by zero,
+        # a number too big to write out — so the model is told which, to fix it.
+        # MCP keeps the text of any other exception from the model.
+        raise ToolError(str(error)) from error
 
 
 def _evaluate(node: ast.expr) -> int | float | complex:
@@ -73,6 +78,3 @@ def _check_power(base: object, exponent: object) -> None:
         and base.bit_length() * exponent > MAX_POWER_BITS
     ):
         raise ValueError(f"{base} ** {exponent} is too large to compute")
-
-
-CALCULATOR = Tool(calculator)

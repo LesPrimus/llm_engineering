@@ -9,8 +9,6 @@ from dotenv import load_dotenv
 from pydantic import Field
 from tavily import TavilyClient  # type: ignore[import-untyped]
 
-from .base import Tool
-
 
 @dataclass(frozen=True)
 class WebSearch:
@@ -105,6 +103,3 @@ class WebSearch:
         if not os.environ.get("TAVILY_API_KEY"):
             raise RuntimeError("TAVILY_API_KEY is unset: web search needs a Tavily key")
         return TavilyClient()
-
-
-WEB_SEARCH = Tool(WebSearch())
