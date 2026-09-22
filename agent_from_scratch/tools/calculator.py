@@ -8,6 +8,8 @@ from typing import Annotated, Any
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
+from .server import server
+
 # ``9 ** 9 ** 9`` is eleven characters and a computation that never finishes.
 # Integer powers are refused past this many bits, about 3,000 digits; a float
 # power overflows on its own, with an error rather than a hang.
@@ -29,6 +31,7 @@ UNARY_OPERATORS: dict[type[ast.unaryop], Callable[[Any], Any]] = {
 }
 
 
+@server.tool(structured_output=False)
 def calculator(
     expression: Annotated[
         str,
