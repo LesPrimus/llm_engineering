@@ -17,6 +17,6 @@ server raises one for a failure the model can act on — arguments it can fix, s
 Anything else is taken for a bug, and the model reads just that the tool failed.
 """
 
-from .server import server
-
-__all__ = ["server"]
+# Nothing is imported here: ``-m`` on the server imports this package first, and
+# a package that imported the server would have it built twice, once under its
+# name and once more as ``__main__``.

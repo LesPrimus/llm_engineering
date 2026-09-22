@@ -9,8 +9,8 @@ The tools are registered with ``structured_output=False``: they answer in prose
 for the model to read, and structured output would only send the same string a
 second time, as ``{"result": ...}``.
 
-Run it as ``python -m agent_from_scratch.tools``: it speaks MCP over its stdin
-and stdout, which is how a client launches a local server and talks to it.
+Run it as ``python -m agent_from_scratch.tools.server``: it speaks MCP over its
+stdin and stdout, which is how a client launches a local server and talks to it.
 """
 
 from typing import Annotated
@@ -101,3 +101,7 @@ def web_search(
     which sources are worth trusting rather than as the full story.
     """
     return search(query, topic, time_range, max_results)
+
+
+if __name__ == "__main__":
+    server.run()
