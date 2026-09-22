@@ -3,12 +3,7 @@
 import ast
 import operator
 from collections.abc import Callable
-from typing import Annotated, Any
-
-from mcp.server.mcpserver.exceptions import ToolError
-from pydantic import Field
-
-from .server import tool
+from typing import Any
 
 # ``9 ** 9 ** 9`` is eleven characters and a computation that never finishes.
 # Integer powers are refused past this many bits, about 3,000 digits; a float
@@ -31,29 +26,16 @@ UNARY_OPERATORS: dict[type[ast.unaryop], Callable[[Any], Any]] = {
 }
 
 
-@tool
-def calculator(
-    expression: Annotated[
-        str,
-        Field(
-            description="Numbers, + - * / // % ** and parentheses, "
-            'e.g. "2 * (3 + 4) ** 2".'
-        ),
-    ],
-) -> str:
-    """Evaluate an arithmetic expression exactly and return the result.
+def calculate(expression: str) -> str:
+    """The exact value of an arithmetic expression, written out.
 
-    Use it for any arithmetic rather than working the numbers out yourself.
+    Raises ``SyntaxError`` when the expression does not parse, ``ValueError``
+    when it is not arithmetic or is too large to compute or to write out, and
+    ``ArithmeticError`` for a division by zero or a float that overflows.
     """
     # Walked by hand rather than handed to ``eval``: the expression is written
     # by a model, and a model can write ``__import__("os")`` as easily as ``1 + 1``.
-    try:
-        return str(_evaluate(ast.parse(expression, mode="eval").body))
-    except (SyntaxError, ArithmeticError, ValueError) as error:
-        # Each of these is the expression's fault — a typo, a division by zero,
-        # a number too big to write out — so the model is told which, to fix it.
-        # MCP keeps the text of any other exception from the model.
-        raise ToolError(str(error)) from error
+    return str(_evaluate(ast.parse(expression, mode="eval").body))
 
 
 def _evaluate(node: ast.expr) -> int | float | complex:
