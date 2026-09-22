@@ -20,7 +20,13 @@ from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
 from .calculator import calculate
-from .web_search import TimeRange, Topic, search
+from .web_search import (
+    DEFAULT_MAX_RESULTS,
+    MAX_RESULTS_LIMIT,
+    TimeRange,
+    Topic,
+    search,
+)
 
 server = MCPServer("agent-tools")
 
@@ -73,6 +79,16 @@ def web_search(
             "hold the answer."
         ),
     ] = None,
+    max_results: Annotated[
+        int,
+        Field(
+            ge=1,
+            le=MAX_RESULTS_LIMIT,
+            description="How many results to return. The default is enough to "
+            "check a claim against a second source; ask for more only when those "
+            "do not settle it, since every result takes room in your context.",
+        ),
+    ] = DEFAULT_MAX_RESULTS,
 ) -> str:
     """Search the web and return the top results: title, URL and a snippet of each.
 
@@ -84,4 +100,4 @@ def web_search(
     The snippets are extracts, not whole pages, so treat them as a way to decide
     which sources are worth trusting rather than as the full story.
     """
-    return search(query, topic, time_range)
+    return search(query, topic, time_range, max_results)

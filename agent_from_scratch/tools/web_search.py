@@ -9,7 +9,11 @@ from tavily import TavilyClient  # type: ignore[import-untyped]
 
 # Enough results to cross-check a claim against a second source, few enough
 # that a handful of searches still leaves room in the context for the reasoning.
-MAX_RESULTS = 5
+DEFAULT_MAX_RESULTS = 5
+
+# The most the model may ask for. Tavily documents 20 as its maximum without
+# enforcing it, and past that a search costs more context than it adds.
+MAX_RESULTS_LIMIT = 20
 
 # "advanced" reads further into each page before picking the snippet, which
 # is worth the extra latency: a snippet that already contains the fact saves
@@ -24,9 +28,12 @@ TimeRange = Literal["day", "week", "month", "year"]
 
 
 def search(
-    query: str, topic: Topic = "general", time_range: TimeRange | None = None
+    query: str,
+    topic: Topic = "general",
+    time_range: TimeRange | None = None,
+    max_results: int = DEFAULT_MAX_RESULTS,
 ) -> str:
-    """The top results for a query, as the text the model reads.
+    """The top ``max_results`` results for a query, as the text the model reads.
 
     Each result is its title, its URL and a snippet, with its date when Tavily
     has one. ``time_range`` drops results older than that.
@@ -36,7 +43,7 @@ def search(
         topic=topic,
         time_range=time_range,
         search_depth=SEARCH_DEPTH,
-        max_results=MAX_RESULTS,
+        max_results=max_results,
     )
     if not (results := response.get("results", [])):
         return f"No results for {query!r}. Try different or broader search terms."
