@@ -11,6 +11,10 @@ second time, as ``{"result": ...}``.
 
 Run it as ``python -m agent_from_scratch.tools.server``: it speaks MCP over its
 stdin and stdout, which is how a client launches a local server and talks to it.
+Or open it in the MCP Inspector with ``mcp dev agent_from_scratch/tools/server.py``.
+That loads this file by its path rather than as part of the package, which is
+why the imports below are absolute: a relative import would have no package to
+be relative to.
 """
 
 from typing import Annotated
@@ -19,8 +23,8 @@ from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from pydantic import Field
 
-from .calculator import calculate
-from .web_search import (
+from agent_from_scratch.tools.calculator import calculate
+from agent_from_scratch.tools.web_search import (
     DEFAULT_MAX_RESULTS,
     MAX_RESULTS_LIMIT,
     TimeRange,
