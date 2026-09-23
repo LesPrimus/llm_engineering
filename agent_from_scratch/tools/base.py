@@ -45,13 +45,12 @@ class FunctionTool(BaseTool):
         self.func = func
         self.needs_context = "context" in inspect.signature(func).parameters
 
-        name = name or func.__name__
-        description = description or (func.__doc__ or "").strip()
-        tool_definition = tool_definition or self._generate_definition()
-
         super().__init__(
-            name=name, description=description, tool_definition=tool_definition
+            name=name or func.__name__,
+            description=description or (func.__doc__ or "").strip(),
         )
+        # Needs self.name and self.description, so it runs after super().__init__.
+        self._tool_definition = tool_definition or self._generate_definition()
 
     async def execute(self, context: ExecutionContext, **kwargs) -> Any:
         """Execute the wrapped function."""
