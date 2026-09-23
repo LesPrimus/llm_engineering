@@ -1,7 +1,21 @@
 import inspect
 from collections.abc import Collection
+from typing import Any
 
 import docstring_parser
+from pydantic import Field, create_model
+from pydantic.json_schema import GenerateJsonSchema
+
+
+class _NoFieldTitles(GenerateJsonSchema):
+    """Leave out the titles pydantic derives from field names.
+
+    A title of "Location" above a property already keyed ``location``
+    tells the model nothing it cannot see, and it pays for the reading.
+    """
+
+    def field_title_should_be_set(self, schema) -> bool:
+        return False
 
 
 def function_to_input_schema(func, exclude: Collection[str] = ()) -> dict:
@@ -13,17 +27,12 @@ def function_to_input_schema(func, exclude: Collection[str] = ()) -> dict:
     Each argument carries the description the docstring gives it. That text
     is what the model reads to decide what to pass, so it belongs in the
     schema rather than only in the prose a human sees.
-    """
-    type_map = {
-        str: "string",
-        int: "integer",
-        float: "number",
-        bool: "boolean",
-        list: "array",
-        dict: "object",
-        type(None): "null",
-    }
 
+    The annotations are read by pydantic, so a container, a union or a
+    ``Literal`` describes itself as precisely as a bare ``str`` does. An
+    argument annotated ``Literal["fast", "slow"]`` reaches the model as an
+    enum of the two words it accepts rather than as an open string.
+    """
     try:
         signature = inspect.signature(func)
     except ValueError as e:
@@ -37,29 +46,27 @@ def function_to_input_schema(func, exclude: Collection[str] = ()) -> dict:
         if param.description
     }
 
-    params = [
-        param for param in signature.parameters.values() if param.name not in exclude
-    ]
+    fields: dict[str, Any] = {}
+    for param in signature.parameters.values():
+        if param.name in exclude:
+            continue
+        # An unannotated argument constrains nothing; saying so beats
+        # guessing at a type the function never asked for.
+        annotation = (
+            Any if param.annotation is inspect.Parameter.empty else param.annotation
+        )
+        default = ... if param.default is inspect.Parameter.empty else param.default
+        fields[param.name] = (
+            annotation,
+            Field(default, description=descriptions.get(param.name)),
+        )
 
-    parameters = {}
-    for param in params:
-        try:
-            param_type = type_map.get(param.annotation, "string")
-        except KeyError as e:
-            raise KeyError(
-                f"Unknown type annotation {param.annotation} for parameter {param.name}: {str(e)}"
-            )
-        parameters[param.name] = {"type": param_type}
-        if param.name in descriptions:
-            parameters[param.name]["description"] = descriptions[param.name]
-
-    required = [param.name for param in params if param.default == inspect._empty]
-
-    return {
-        "type": "object",
-        "properties": parameters,
-        "required": required,
-    }
+    schema = create_model(func.__name__, **fields).model_json_schema(
+        schema_generator=_NoFieldTitles
+    )
+    # The model exists only to be described; its name is not part of the schema.
+    schema.pop("title", None)
+    return schema
 
 
 def function_to_description(func) -> str:
@@ -84,9 +91,3 @@ def format_tool_definition(name: str, description: str, parameters: dict) -> dic
             "parameters": parameters,
         },
     }
-
-
-def function_to_tool_definition(func) -> dict:
-    return format_tool_definition(
-        func.__name__, function_to_description(func), function_to_input_schema(func)
-    )
