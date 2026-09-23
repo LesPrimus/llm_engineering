@@ -3,7 +3,11 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any
 
-from agent_from_scratch.helpers import function_to_input_schema, format_tool_definition
+from agent_from_scratch.helpers import (
+    function_to_description,
+    function_to_input_schema,
+    format_tool_definition,
+)
 from agent_from_scratch.models import ExecutionContext
 
 
@@ -47,7 +51,7 @@ class FunctionTool(BaseTool):
 
         super().__init__(
             name=name or func.__name__,
-            description=description or (func.__doc__ or "").strip(),
+            description=description or function_to_description(func),
         )
         # Needs self.name and self.description, so it runs after super().__init__.
         self._tool_definition = tool_definition or self._generate_definition()
