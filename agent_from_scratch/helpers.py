@@ -78,7 +78,7 @@ def function_to_description(func) -> str:
     return "\n\n".join(part for part in prose if part)
 
 
-def function_to_argument_descriptions(func) -> dict[str, str]:
+def function_to_argument_descriptions(func) -> dict[str, str | None]:
     """Take the other half: what the docstring says about each argument.
 
     An argument the docstring passes over is absent rather than empty, so
