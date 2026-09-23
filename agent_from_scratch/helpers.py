@@ -1,7 +1,13 @@
 import inspect
+from collections.abc import Collection
 
 
-def function_to_input_schema(func) -> dict:
+def function_to_input_schema(func, exclude: Collection[str] = ()) -> dict:
+    """Describe a function's arguments as a JSON schema.
+
+    Parameters named in ``exclude`` are left out: an argument the caller
+    supplies itself is not one the model should be asked for.
+    """
     type_map = {
         str: "string",
         int: "integer",
@@ -19,8 +25,12 @@ def function_to_input_schema(func) -> dict:
             f"Failed to get signature for function {func.__name__}: {str(e)}"
         )
 
+    params = [
+        param for param in signature.parameters.values() if param.name not in exclude
+    ]
+
     parameters = {}
-    for param in signature.parameters.values():
+    for param in params:
         try:
             param_type = type_map.get(param.annotation, "string")
         except KeyError as e:
@@ -29,11 +39,7 @@ def function_to_input_schema(func) -> dict:
             )
         parameters[param.name] = {"type": param_type}
 
-    required = [
-        param.name
-        for param in signature.parameters.values()
-        if param.default == inspect._empty
-    ]
+    required = [param.name for param in params if param.default == inspect._empty]
 
     return {
         "type": "object",

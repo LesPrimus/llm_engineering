@@ -66,5 +66,7 @@ class FunctionTool(BaseTool):
 
     def _generate_definition(self) -> dict[str, Any]:
         """Generate tool definition from function signature."""
-        parameters = function_to_input_schema(self.func)
+        # execute injects the context, so the model is never asked for it.
+        exclude = {"context"} if self.needs_context else ()
+        parameters = function_to_input_schema(self.func, exclude=exclude)
         return format_tool_definition(self.name, self.description, parameters)
