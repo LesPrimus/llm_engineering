@@ -40,11 +40,7 @@ def function_to_input_schema(func, exclude: Collection[str] = ()) -> dict:
             f"Failed to get signature for function {func.__name__}: {str(e)}"
         )
 
-    descriptions = {
-        param.arg_name: param.description
-        for param in docstring_parser.parse(func.__doc__ or "").params
-        if param.description
-    }
+    descriptions = function_to_argument_descriptions(func)
 
     fields: dict[str, Any] = {}
     for param in signature.parameters.values():
@@ -80,6 +76,20 @@ def function_to_description(func) -> str:
     docstring = docstring_parser.parse(func.__doc__ or "")
     prose = [docstring.short_description, docstring.long_description]
     return "\n\n".join(part for part in prose if part)
+
+
+def function_to_argument_descriptions(func) -> dict[str, str]:
+    """Take the other half: what the docstring says about each argument.
+
+    An argument the docstring passes over is absent rather than empty, so
+    the schema can leave it undescribed instead of describing it as
+    nothing.
+    """
+    return {
+        param.arg_name: param.description
+        for param in docstring_parser.parse(func.__doc__ or "").params
+        if param.description
+    }
 
 
 def format_tool_definition(name: str, description: str, parameters: dict) -> dict:
