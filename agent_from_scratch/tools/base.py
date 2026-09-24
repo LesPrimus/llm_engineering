@@ -20,7 +20,7 @@ class BaseTool(ABC):
         description: str | None = None,
         tool_definition: dict[str, Any] | None = None,
     ):
-        self.name = name or self.__class__.__name__
+        self.name = name or type(self).__name__
         self.description = description or self.__doc__ or ""
         self._tool_definition = tool_definition
 
@@ -29,10 +29,10 @@ class BaseTool(ABC):
         return self._tool_definition
 
     @abstractmethod
-    async def execute(self, context: ExecutionContext, **kwargs) -> Any:
+    async def execute(self, context: ExecutionContext | None = None, **kwargs) -> Any:
         pass
 
-    async def __call__(self, context: ExecutionContext, **kwargs) -> Any:
+    async def __call__(self, context: ExecutionContext | None = None, **kwargs) -> Any:
         return await self.execute(context, **kwargs)
 
 
@@ -56,9 +56,11 @@ class FunctionTool(BaseTool):
         # Needs self.name and self.description, so it runs after super().__init__.
         self._tool_definition = tool_definition or self._generate_definition()
 
-    async def execute(self, context: ExecutionContext, **kwargs) -> Any:
+    async def execute(self, context: ExecutionContext | None = None, **kwargs) -> Any:
         """Execute the wrapped function."""
         if self.needs_context:
+            if context is None:
+                raise ValueError(f"Tool '{self.name}' requires an ExecutionContext")
             result = self.func(context=context, **kwargs)
         else:
             result = self.func(**kwargs)
