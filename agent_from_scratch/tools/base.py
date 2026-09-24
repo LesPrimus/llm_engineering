@@ -8,7 +8,7 @@ from agent_from_scratch.helpers import (
     function_to_input_schema,
     format_tool_definition,
 )
-from agent_from_scratch.models import ExecutionContext
+from agent_from_scratch.execution_context import ExecutionContext
 
 
 class BaseTool(ABC):

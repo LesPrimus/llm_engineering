@@ -1,16 +1,23 @@
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime as dt
 from enum import StrEnum, auto
 from typing import Literal, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from agent_from_scratch.tools.base import BaseTool
 
 
 class EventType(StrEnum):
     MESSAGE = auto()
     TOOL_CALL = auto()
     TOOL_RESULT = auto()
+
+
+class Role(StrEnum):
+    SYSTEM = auto()
+    USER = auto()
+    ASSISTANT = auto()
 
 
 class Event(BaseModel):
@@ -27,7 +34,7 @@ class Message(BaseModel):
     """A text message in the conversation."""
 
     type: EventType = EventType.MESSAGE
-    role: Literal["system", "user", "assistant"]
+    role: Role
     content: str
 
 
@@ -53,20 +60,20 @@ class ToolResult(BaseModel):
 type ContentItem = Message | ToolCall | ToolResult
 
 
-@dataclass
-class ExecutionContext:
-    """Central storage for all execution state."""
+class LlmRequest(BaseModel):
+    """Request object for LLM calls."""
 
-    execution_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    events: list[Event] = field(default_factory=list)
-    current_step: int = 0
-    state: dict[str, Any] = field(default_factory=dict)
-    final_result: str | BaseModel | None = None
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    def add_event(self, event: Event):
-        """Append an event to the execution history."""
-        self.events.append(event)
+    instructions: list[str] = Field(default_factory=list)
+    contents: list[ContentItem] = Field(default_factory=list)
+    tools: list[BaseTool] = Field(default_factory=list)
+    tool_choice: str | None = None
 
-    def increment_step(self):
-        """Move to the next execution step."""
-        self.current_step += 1
+
+class LlmResponse(BaseModel):
+    """Response object from LLM calls."""
+
+    content: list[ContentItem] = Field(default_factory=list)
+    error_message: str | None = None
+    usage_metadata: dict[str, Any] = Field(default_factory=dict)

@@ -3,7 +3,7 @@ from typing import Any
 from mcp import ClientSession, types
 
 from agent_from_scratch.helpers import format_tool_definition
-from agent_from_scratch.models import ExecutionContext
+from agent_from_scratch.execution_context import ExecutionContext
 from agent_from_scratch.tools.base import BaseTool
 
 
