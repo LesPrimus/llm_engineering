@@ -1,7 +1,7 @@
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any
+from typing import Any, overload
 
 from agent_from_scratch.helpers import (
     function_to_description,
@@ -76,3 +76,37 @@ class FunctionTool(BaseTool):
         exclude = {"context"} if self.needs_context else ()
         parameters = function_to_input_schema(self.func, exclude=exclude)
         return format_tool_definition(self.name, self.description, parameters)
+
+
+@overload
+def tool(func: Callable, /) -> FunctionTool: ...
+
+
+@overload
+def tool(
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    tool_definition: dict[str, Any] | None = None,
+) -> Callable[[Callable], FunctionTool]: ...
+
+
+def tool(
+    func: Callable | None = None,
+    /,
+    *,
+    name: str | None = None,
+    description: str | None = None,
+    tool_definition: dict[str, Any] | None = None,
+) -> FunctionTool | Callable[[Callable], FunctionTool]:
+    """Turn a function into a FunctionTool, as ``@tool`` or ``@tool(name=...)``."""
+
+    def decorator(f: Callable) -> FunctionTool:
+        return FunctionTool(
+            f, name=name, description=description, tool_definition=tool_definition
+        )
+
+    # Bare @tool hands the function straight in; @tool(...) returns the decorator.
+    if func is None:
+        return decorator
+    return decorator(func)
