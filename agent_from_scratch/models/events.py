@@ -1,10 +1,10 @@
+"""What happens during a run: messages, tool calls and their results."""
+
 import uuid
 from datetime import datetime as dt
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
-
-from agent_from_scratch.tools.base import BaseTool
+from pydantic import BaseModel, Field
 
 
 class BaseEvent(BaseModel):
@@ -45,22 +45,3 @@ class ToolResult(BaseEvent):
 
 
 type Event = Annotated[Message | ToolCall | ToolResult, Field(discriminator="type")]
-
-
-class LlmRequest(BaseModel):
-    """Request object for LLM calls."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    instructions: list[str] = Field(default_factory=list)
-    contents: list[Event] = Field(default_factory=list)
-    tools: list[BaseTool] = Field(default_factory=list)
-    tool_choice: str | None = None
-
-
-class LlmResponse(BaseModel):
-    """Response object from LLM calls."""
-
-    content: list[Event] = Field(default_factory=list)
-    error_message: str | None = None
-    usage_metadata: dict[str, Any] = Field(default_factory=dict)
