@@ -1,14 +1,18 @@
 import inspect
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any, overload
+from typing import TYPE_CHECKING, Any, overload
 
 from agent_from_scratch.helpers import (
     function_to_description,
     function_to_input_schema,
     format_tool_definition,
 )
-from agent_from_scratch.execution_context import ExecutionContext
+
+if TYPE_CHECKING:
+    # models imports the tools for LlmRequest: ExecutionContext is only needed
+    # for annotations, so importing it at runtime would close the cycle.
+    from agent_from_scratch.models import ExecutionContext
 
 
 class BaseTool(ABC):

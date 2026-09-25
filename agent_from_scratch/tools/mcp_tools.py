@@ -1,10 +1,14 @@
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mcp import ClientSession, types
 
 from agent_from_scratch.helpers import format_tool_definition
-from agent_from_scratch.execution_context import ExecutionContext
 from agent_from_scratch.tools.base import BaseTool
+
+if TYPE_CHECKING:
+    # models imports the tools for LlmRequest: ExecutionContext is only needed
+    # for annotations, so importing it at runtime would close the cycle.
+    from agent_from_scratch.models import ExecutionContext
 
 
 class MCPToolError(Exception):
