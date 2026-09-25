@@ -1,6 +1,7 @@
 import asyncio
 from dataclasses import dataclass
 
+from dotenv import load_dotenv
 from pydantic import BaseModel
 
 from agent_from_scratch.client import LlmClient
@@ -11,7 +12,8 @@ from agent_from_scratch.models import (
     ToolCall,
     ToolResult,
 )
-from agent_from_scratch.tools.base import BaseTool
+from agent_from_scratch.tools.base import BaseTool, FunctionTool
+from agent_from_scratch.tools.calculator import calculate
 
 
 @dataclass(frozen=True)
@@ -86,9 +88,23 @@ class Agent:
 
 
 async def main() -> None:
-    client = LlmClient()
-    agent = Agent(model=client, instructions="Hey yooo")
-    print(await agent.run(user_input="hello"))
+    load_dotenv()
+    agent = Agent(
+        model=LlmClient(),
+        tools=[FunctionTool(calculate)],
+        instructions="Use the calculate tool for any arithmetic.",
+    )
+    context = ExecutionContext()
+    print("result:", await agent.run("What is 1234 * 5678 + 91?", context))
+    for event in context.events:
+        match event:
+            case ToolCall(name=name, arguments=arguments):
+                print(f"  {event.author}: call {name}({arguments})")
+            case ToolResult(content=content, status=status):
+                print(f"  {event.author}: {status} {content}")
+            case Message(content=content):
+                print(f"  {event.author}: {content}")
+    print("steps:", context.current_step)
 
 
 if __name__ == "__main__":
