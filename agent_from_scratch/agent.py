@@ -12,7 +12,7 @@ from agent_from_scratch.models import (
     ToolCall,
     ToolResult,
 )
-from agent_from_scratch.tools.base import BaseTool, FunctionTool
+from agent_from_scratch.tools.base import BaseTool, tool
 from agent_from_scratch.tools.calculator import calculate
 
 
@@ -91,7 +91,7 @@ async def main() -> None:
     load_dotenv()
     agent = Agent(
         model=LlmClient(),
-        tools=[FunctionTool(calculate)],
+        tools=[tool(calculate)],
         instructions="Use the calculate tool for any arithmetic.",
     )
     context = ExecutionContext()
