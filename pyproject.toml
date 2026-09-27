@@ -43,6 +43,7 @@ dev = [
     "mypy>=2.2.0",
     "nbstripout>=0.9.1",
     "pre-commit>=4.6.0",
+    "pydantic-ai>=2.31.1",
     "ruff>=0.15.20",
     "smolagents[toolkit]>=1.26.0",
     "types-tqdm>=4.70.0.20260906",
