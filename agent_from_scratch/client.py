@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from litellm import acompletion
+from litellm import acompletion, get_llm_provider, get_model_info
 
 from agent_from_scratch.models import (
     Event,
@@ -31,6 +31,8 @@ class LlmClient:
             kwargs["tools"] = [tool.tool_definition for tool in request.tools]
         if request.tool_choice:
             kwargs["tool_choice"] = request.tool_choice
+        if request.response_format:
+            kwargs["response_format"] = request.response_format
 
         response = await acompletion(
             model=self.model,
@@ -41,6 +43,27 @@ class LlmClient:
             **self.options,
         )
         return self.from_response(response)
+
+    def supports_native_structured_output(self) -> bool:
+        """Whether the provider itself holds the answer to a ``response_format``.
+
+        Where it cannot, litellm stands in with a tool the model is forced to
+        call on every turn, which leaves the model no way to call any other —
+        or, for a model with no support at all, the format may be dropped. So
+        only a provider known to enforce it counts, and anything uncertain is
+        left to the answer tool, which works wherever tool calling does.
+        """
+        try:
+            _, provider, _, _ = get_llm_provider(self.model)
+            info = get_model_info(self.model)
+        except Exception:
+            # A model litellm does not know is one it cannot vouch for.
+            return False
+        # OpenAI's API enforces response_format itself; litellm passes it straight through.
+        if provider in {"openai", "azure"}:
+            return bool(info.get("supports_response_schema"))
+        # Elsewhere litellm may fake it with a forced tool, so only its native flag counts.
+        return bool(info.get("supports_native_structured_output"))
 
     @classmethod
     def to_messages(cls, request: LlmRequest) -> list[dict[str, Any]]:

@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, overload
 
+from pydantic import BaseModel
+
 from agent_from_scratch.helpers import (
     function_to_description,
     function_to_input_schema,
@@ -80,6 +82,33 @@ class FunctionTool(BaseTool):
         exclude = {"context"} if self.needs_context else ()
         parameters = function_to_input_schema(self.func, exclude=exclude)
         return format_tool_definition(self.name, self.description, parameters)
+
+
+class FinalAnswerTool(BaseTool):
+    """The tool the model hands its answer to, in the shape of ``output_type``.
+
+    It stands in for ``response_format`` where the provider cannot enforce a
+    schema while leaving the model free to call other tools.
+    """
+
+    def __init__(self, output_type: type[BaseModel]):
+        self.output_type = output_type
+        name = "final_answer"
+        description = (
+            "Give your final answer. Call this once you have everything you "
+            "need, instead of replying with text."
+        )
+        super().__init__(
+            name=name,
+            description=description,
+            tool_definition=format_tool_definition(
+                name, description, output_type.model_json_schema()
+            ),
+        )
+
+    async def execute(self, context: ExecutionContext | None = None, **kwargs) -> Any:
+        # A ValidationError goes back to the model as the call's error, to retry.
+        return self.output_type.model_validate(kwargs)
 
 
 @overload

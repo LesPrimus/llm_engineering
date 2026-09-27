@@ -18,6 +18,8 @@ class LlmRequest(BaseModel):
     contents: list[Event] = Field(default_factory=list)
     tools: list[BaseTool] = Field(default_factory=list)
     tool_choice: str | None = None
+    # The schema the model's text answer must follow, enforced by the provider.
+    response_format: type[BaseModel] | None = None
 
 
 class LlmResponse(BaseModel):
