@@ -10,11 +10,37 @@ readable and one provider's rate limit away from another's.
 
 A task that runs out of steps without answering is recorded as an error, and
 every attempt keeps the steps it used, so a miss that gave up can be told from
-one that answered wrong. Run it with::
+one that answered wrong.
 
+Before the first run:
+
+- accept GAIA's terms on the Hub (the dataset is gated), then put ``HF_TOKEN``
+  in ``.env`` or run ``uv run huggingface-cli login``;
+- put ``TAVILY_API_KEY`` in ``.env``, and the key for each model's provider
+  (``OPENAI_API_KEY``, ``ANTHROPIC_API_KEY``, ...).
+
+Run it from the repo root. Every flag is optional; with none, it runs
+:data:`MODELS` over the whole validation split::
+
+    # A dry run: the first 10 level 1 tasks.
     uv run python -m agent_from_scratch.gaia_eval.agent_eval --limit 10 --level 1
+
+    # The whole split, every attempt saved as JSONL for a second look.
     uv run python -m agent_from_scratch.gaia_eval.agent_eval --out runs/agent.jsonl
+
+    # Chosen tasks, in this order. Leave --level off: it hides the other levels.
     uv run python -m agent_from_scratch.gaia_eval.agent_eval --task-ids <id> <id>
+
+    # Other models, by their litellm name; each gets its own scoreboard row.
+    uv run python -m agent_from_scratch.gaia_eval.agent_eval \\
+        --models gpt-5 anthropic/claude-haiku-4-5 --limit 10
+
+    # Every flag, with its help.
+    uv run python -m agent_from_scratch.gaia_eval.agent_eval --help
+
+To pick out the misses from a saved run::
+
+    jq -r 'select(.correct | not) | [.task_id, .expected, .answer] | @tsv' runs/agent.jsonl
 
 This one spends money: up to MAX_STEPS calls per task, plus a Tavily search for
 each one the model asks for.
@@ -180,12 +206,25 @@ def write(results: dict[str, list[Attempt]], path: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--models", nargs="+", default=MODELS, metavar="MODEL")
     parser.add_argument(
-        "--split", type=Split, choices=list(Split), default=Split.VALIDATION
+        "--models",
+        nargs="+",
+        default=MODELS,
+        metavar="MODEL",
+        help=f"litellm model names, run one after another (default: {' '.join(MODELS)})",
     )
     parser.add_argument(
-        "--level", type=lambda value: Level(int(value)), choices=list(Level)
+        "--split",
+        type=Split,
+        choices=list(Split),
+        default=Split.VALIDATION,
+        help="only validation can be scored; test keeps its answers private",
+    )
+    parser.add_argument(
+        "--level",
+        type=lambda value: Level(int(value)),
+        choices=list(Level),
+        help="only this level's tasks (default: all three)",
     )
     parser.add_argument(
         "--task-ids",
