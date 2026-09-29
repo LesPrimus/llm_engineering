@@ -6,6 +6,7 @@ token from ``HF_TOKEN`` or ``huggingface-cli login``.
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Self
 
 from datasets import load_dataset
@@ -38,3 +39,15 @@ class GaiaDataset:
 
     def __getitem__(self, index: int) -> GaiaTask:
         return self.tasks[index]
+
+    def get(self, task_id: str) -> GaiaTask:
+        """The task with this id, or ``KeyError`` if the split and level lack it."""
+        try:
+            return self._by_id[task_id]
+        except KeyError:
+            level = "" if self.level is None else f" level {self.level}"
+            raise KeyError(f"no task {task_id!r} in {self.split}{level}") from None
+
+    @cached_property
+    def _by_id(self) -> dict[str, GaiaTask]:
+        return {task.task_id: task for task in self.tasks}

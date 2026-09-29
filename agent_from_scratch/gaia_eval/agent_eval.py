@@ -14,6 +14,7 @@ one that answered wrong. Run it with::
 
     uv run python -m agent_from_scratch.gaia_eval.agent_eval --limit 10 --level 1
     uv run python -m agent_from_scratch.gaia_eval.agent_eval --out runs/agent.jsonl
+    uv run python -m agent_from_scratch.gaia_eval.agent_eval --task-ids <id> <id>
 
 This one spends money: up to MAX_STEPS calls per task, plus a Tavily search for
 each one the model asks for.
@@ -187,6 +188,12 @@ def parse_args() -> argparse.Namespace:
         "--level", type=lambda value: Level(int(value)), choices=list(Level)
     )
     parser.add_argument(
+        "--task-ids",
+        nargs="+",
+        metavar="TASK_ID",
+        help="only these tasks, in this order",
+    )
+    parser.add_argument(
         "--limit", type=int, help="only the first N tasks, for a dry run"
     )
     parser.add_argument(
@@ -203,7 +210,14 @@ def main() -> None:
 
     load_dotenv()
     dataset = GaiaDataset.from_hub(args.split, args.level)
-    tasks = dataset.tasks[: args.limit] if args.limit else dataset.tasks
+    tasks = dataset.tasks
+    if args.task_ids:
+        try:
+            tasks = tuple(dataset.get(task_id) for task_id in args.task_ids)
+        except KeyError as error:
+            raise SystemExit(error.args[0]) from None
+    if args.limit:
+        tasks = tasks[: args.limit]
     print(f"{len(tasks)} {args.split} tasks, {len(args.models)} models\n")
 
     results = asyncio.run(run(args.models, tasks))
