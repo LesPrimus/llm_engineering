@@ -1,34 +1,41 @@
-"""A no-tools baseline on GAIA: ask a bare LLM the questions, score its final answers.
+"""The agent on GAIA: put the questions to the agent loop, score its final answers.
 
-The number the agent has to beat. Every task goes to the model as plain text —
-no search, no code, no file reading — so what this measures is how far the
-weights alone get you, which on GAIA is not very far and is meant not to be.
-Level 1 questions are answerable by a strong model that happens to remember the
-fact; levels 2 and 3 chain lookups the model cannot make, and the 38 validation
-tasks that ship an attached file are unanswerable here by construction. Those
-are told about the file they cannot open (:data:`prompts.FILE_NOTE`) so that
-declining is available to them, and a decline still scores zero — the point of
-the row is what the agent will rescue.
+The agent gets web search and the calculator, and up to :data:`MAX_STEPS` turns
+to use them. It cannot open the files some tasks attach yet, so those are told
+so (:data:`prompts.FILE_NOTE`) and declining is available to them; a decline
+still scores zero.
 
 Models run one at a time, their tasks concurrently, which keeps the progress bar
-readable and one provider's rate limit away from another's. Run it with::
+readable and one provider's rate limit away from another's.
 
-    uv run python -m agent_from_scratch.gaia_eval.baseline --limit 10
-    uv run python -m agent_from_scratch.gaia_eval.baseline --out runs/baseline.jsonl
+A task that runs out of steps without answering is recorded as an error, and
+every attempt keeps the steps it used, so a miss that gave up can be told from
+one that answered wrong. Run it with::
 
-This one spends money: one call per task per model.
+    uv run python -m agent_from_scratch.gaia_eval.agent_eval --limit 10 --level 1
+    uv run python -m agent_from_scratch.gaia_eval.agent_eval --out runs/agent.jsonl
+
+This one spends money: up to MAX_STEPS calls per task, plus a Tavily search for
+each one the model asks for.
 """
 
 import argparse
 import asyncio
+import functools
 import json
 import time
 from collections.abc import Sequence
 from pathlib import Path
 
 from dotenv import load_dotenv
-from litellm import acompletion
 from tqdm.asyncio import tqdm
+
+from agent_from_scratch.agent import Agent
+from agent_from_scratch.client import LlmClient
+from agent_from_scratch.models import ExecutionContext
+from agent_from_scratch.tools.base import tool
+from agent_from_scratch.tools.calculator import calculate
+from agent_from_scratch.tools.web_search import search
 
 from .constants import Level, Split
 from .dataset import GaiaDataset
@@ -36,61 +43,64 @@ from .models import GaiaReply, GaiaTask
 from .prompts import FILE_NOTE, SYSTEM_PROMPT
 from .results import Attempt, Scorecard, by_level, summarise
 
-MODELS = [
-    "gpt-5",
-    "gpt-5-mini",
-    "anthropic/claude-sonnet-4-5",
-    "anthropic/claude-haiku-4-5",
-]
+MODELS = ["gpt-5-mini"]
 
-# In-flight calls per model. Well under every provider's limit, and the run is
+# Tasks in flight per model. Well under every provider's limit, and the run is
 # long enough that a 429 storm costs more time than the concurrency saves.
 CONCURRENCY = 8
 
-# A reasoning model on a level 3 question thinks for minutes, so the timeout is
-# generous; retries cover the transient failures that a short one would mask.
-TIMEOUT = 600.0
-RETRIES = 3
+# GAIA's annotators took up to a few dozen steps on level 3; a model that has
+# not answered in this many turns is usually searching in circles.
+MAX_STEPS = 20
 
 
-def messages(task: GaiaTask) -> list[dict[str, str]]:
-    """The two messages one task becomes: GAIA's format rules, then the question."""
-    question = task.question
+@functools.wraps(search)
+async def _search(*args, **kwargs) -> str:
+    """``search`` off the event loop: Tavily's client blocks, and tasks run side by side."""
+    return await asyncio.to_thread(search, *args, **kwargs)
+
+
+def build_agent(model: str) -> Agent:
+    """The agent under test, answering in GAIA's reply shape."""
+    return Agent(
+        model=LlmClient(model=model),
+        tools=[tool(_search), tool(calculate)],
+        instructions=SYSTEM_PROMPT,
+        max_steps=MAX_STEPS,
+        structured_output=GaiaReply,
+    )
+
+
+def question(task: GaiaTask) -> str:
+    """The question as the agent reads it, with a note on any file it cannot open."""
     if task.file_name:
-        question += FILE_NOTE.format(file_name=task.file_name)
-    return [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": question},
-    ]
+        return task.question + FILE_NOTE.format(file_name=task.file_name)
+    return task.question
 
 
-async def attempt(model: str, task: GaiaTask, gate: asyncio.Semaphore) -> Attempt:
-    """Ask one model one question, and keep whatever came back.
+async def attempt(agent: Agent, task: GaiaTask, gate: asyncio.Semaphore) -> Attempt:
+    """Run the agent on one question, and keep whatever came back.
 
     Failures are recorded rather than raised: on a run of this length something
-    always times out, and losing the other 164 results to it would be a poor
-    trade. The attempt still counts as a miss.
+    always times out, and losing the other results to it would be a poor trade.
+    The attempt still counts as a miss.
     """
     started = time.monotonic()
+    context = ExecutionContext()
     reply: GaiaReply | None = None
     error: str | None = None
     try:
         async with gate:
-            response = await acompletion(
-                model=model,
-                messages=messages(task),
-                response_format=GaiaReply,
-                num_retries=RETRIES,
-                timeout=TIMEOUT,
-            )
-        content = response.choices[0].message.content
-        if not content:
-            raise ValueError("model returned an empty reply")
-        reply = GaiaReply.model_validate_json(content)
-    except Exception as exception:  # noqa: BLE001 - one bad call is one bad row
+            result = await agent.run(question(task), context)
+        if result is None:
+            raise TimeoutError(f"no answer within {agent.max_steps} steps")
+        if not isinstance(result, GaiaReply):
+            raise TypeError(f"expected a GaiaReply, got {type(result).__name__}")
+        reply = result
+    except Exception as exception:  # noqa: BLE001 - one bad run is one bad row
         error = f"{type(exception).__name__}: {exception}"
     return Attempt(
-        model=model,
+        model=agent.model.model,
         task_id=task.task_id,
         level=task.level,
         question=task.question,
@@ -99,21 +109,23 @@ async def attempt(model: str, task: GaiaTask, gate: asyncio.Semaphore) -> Attemp
         reply=reply,
         error=error,
         seconds=time.monotonic() - started,
+        steps=context.current_step,
     )
 
 
 async def run_model(model: str, tasks: Sequence[GaiaTask]) -> list[Attempt]:
-    """Put every task to one model, at most :data:`CONCURRENCY` at a time."""
+    """Put every task to one model's agent, at most :data:`CONCURRENCY` at a time."""
+    agent = build_agent(model)
     gate = asyncio.Semaphore(CONCURRENCY)
     return await tqdm.gather(
-        *(attempt(model, task, gate) for task in tasks), desc=f"{model:<28}", unit="q"
+        *(attempt(agent, task, gate) for task in tasks), desc=f"{model:<28}", unit="q"
     )
 
 
 async def run(
     models: Sequence[str], tasks: Sequence[GaiaTask]
 ) -> dict[str, list[Attempt]]:
-    """Run each model over the whole task list, one model after another."""
+    """Run each model's agent over the whole task list, one model after another."""
     return {model: await run_model(model, tasks) for model in models}
 
 
@@ -140,7 +152,7 @@ def report(results: dict[str, list[Attempt]]) -> None:
     for model, attempts in results.items():
         failed = [one for one in attempts if one.error]
         if failed:
-            print(f"\n{len(failed)} calls failed on {model}:")
+            print(f"\n{len(failed)} runs failed on {model}:")
             for one in failed[:5]:
                 print(f"  {one.task_id:<38}{one.error}")
 
@@ -184,7 +196,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    """Load the split, run the models over it, print the scoreboard."""
+    """Load the split, run the agent over it, print the scoreboard."""
     args = parse_args()
     if args.split is Split.TEST:
         raise SystemExit("the test split keeps its answers private — nothing to score")

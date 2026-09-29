@@ -30,13 +30,15 @@ class Attempt(BaseModel):
     question: str
     # GAIA's own answer, ``None`` on the test split where they stay private.
     expected: str | None
-    # The name of the attached file, when the task has one. A no-tools baseline
-    # cannot open it, so these are the questions it is expected to decline.
+    # The name of the attached file, when the task has one. The agent cannot
+    # open it yet, so these are the questions it is expected to decline.
     file_name: str | None
     # ``None`` when the call failed or its reply would not validate.
     reply: GaiaReply | None
     error: str | None
     seconds: float
+    # Turns of the agent loop used, whether or not it answered.
+    steps: int
 
     @property
     def answer(self) -> str | None:
